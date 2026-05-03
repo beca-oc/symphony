@@ -34,8 +34,8 @@ start_runner() {
 }
 
 start_runner "ai-chatbot" 4001 "workflows/ai-chatbot.md"
-start_runner "spice-harvester" 4002 "WORKFLOW.spice-harvester.md"
-start_runner "causl" 4003 "WORKFLOW.causl.md"
-start_runner "market-ontology" 4004 "WORKFLOW.market-ontology.md"
+start_runner "spice-harvester" 4002 "workflows/spice-harvester.md"
+start_runner "causl" 4003 "workflows/causl-io.md"
+start_runner "market-ontology" 4004 "workflows/market-ontology.md"
 
 screen -ls || true
