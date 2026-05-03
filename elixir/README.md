@@ -92,12 +92,27 @@ tracker:
   project_slug: "..."
 workspace:
   root: ~/code/workspaces
+repo:
+  name: your-repo
+  github_repo: your-org/your-repo
+  default_branch: main
 hooks:
+  timeout_ms: 600000
   after_create: |
+    set -eu
     git clone git@github.com:your-org/your-repo.git .
+validation:
+  preflight: |
+    set -eu
+    test -d .git
+  fast: mix test
+  full: mix test
+  deploy_evidence: none
+  evidence_required: true
 agent:
   max_concurrent_agents: 10
   max_turns: 20
+  max_uncached_tokens: 500000
 codex:
   command: codex app-server
 ---
@@ -121,10 +136,19 @@ Notes:
   Symphony validation.
 - `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
+- `agent.max_total_tokens` is a hard cap on provider-reported total tokens, including cached input.
+- `agent.max_uncached_tokens` caps uncached input plus output tokens, so repeated cached context
+  replay does not stop a worker before useful repo work completes.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
+- Use `repo.github_repo` and `validation.*` to make Symphony own the deterministic harness around
+  the agent. `validation.preflight` runs before Codex starts; a failure comments on the issue and
+  moves it to `Rework`. When `validation.evidence_required` is true, Symphony verifies the workpad,
+  branch, commit, draft PR, `symphony` label, validation evidence, and required deployment/check
+  evidence before moving the issue to `Human Review`.
+- Supported `validation.deploy_evidence` values are `none`, `vercel`, and `github_checks`.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.

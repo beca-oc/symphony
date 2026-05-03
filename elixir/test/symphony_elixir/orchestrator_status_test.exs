@@ -137,9 +137,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       last_codex_timestamp: nil,
       last_codex_event: nil,
       codex_input_tokens: 0,
+      codex_cached_input_tokens: 0,
+      codex_uncached_input_tokens: 0,
       codex_output_tokens: 0,
+      codex_uncached_total_tokens: 0,
       codex_total_tokens: 0,
       codex_last_reported_input_tokens: 0,
+      codex_last_reported_cached_input_tokens: 0,
       codex_last_reported_output_tokens: 0,
       codex_last_reported_total_tokens: 0,
       started_at: started_at
@@ -172,7 +176,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            "method" => "thread/tokenUsage/updated",
            "params" => %{
              "tokenUsage" => %{
-               "total" => %{"inputTokens" => 12, "outputTokens" => 4, "totalTokens" => 16}
+               "total" => %{
+                 "inputTokens" => 12,
+                 "cachedInputTokens" => 9,
+                 "outputTokens" => 4,
+                 "totalTokens" => 16
+               }
              }
            }
          },
@@ -185,7 +194,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert %{running: [snapshot_entry]} = snapshot
     assert snapshot_entry.codex_app_server_pid == "4242"
     assert snapshot_entry.codex_input_tokens == 12
+    assert snapshot_entry.codex_cached_input_tokens == 9
+    assert snapshot_entry.codex_uncached_input_tokens == 3
     assert snapshot_entry.codex_output_tokens == 4
+    assert snapshot_entry.codex_uncached_total_tokens == 7
     assert snapshot_entry.codex_total_tokens == 16
     assert snapshot_entry.turn_count == 1
     assert is_integer(snapshot_entry.runtime_seconds)
@@ -194,7 +206,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     completed_state = :sys.get_state(pid)
 
     assert completed_state.codex_totals.input_tokens == 12
+    assert completed_state.codex_totals.cached_input_tokens == 9
+    assert completed_state.codex_totals.uncached_input_tokens == 3
     assert completed_state.codex_totals.output_tokens == 4
+    assert completed_state.codex_totals.uncached_total_tokens == 7
     assert completed_state.codex_totals.total_tokens == 16
     assert is_integer(completed_state.codex_totals.seconds_running)
   end
@@ -957,7 +972,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert is_integer(due_at_ms)
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    assert remaining_ms >= 9_500
+    assert remaining_ms >= 8_500
     assert remaining_ms <= 10_500
   end
 

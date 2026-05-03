@@ -7,16 +7,20 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, DeliveryEvidence, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
+  @max_linear_rate_limit_poll_delay_ms 3_600_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @empty_codex_totals %{
     input_tokens: 0,
+    cached_input_tokens: 0,
+    uncached_input_tokens: 0,
     output_tokens: 0,
+    uncached_total_tokens: 0,
     total_tokens: 0,
     seconds_running: 0
   }
@@ -132,16 +136,7 @@ defmodule SymphonyElixir.Orchestrator do
         state =
           case reason do
             :normal ->
-              Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
-
-              state
-              |> complete_issue(issue_id)
-              |> schedule_issue_retry(issue_id, 1, %{
-                identifier: running_entry.identifier,
-                delay_type: :continuation,
-                worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
-              })
+              handle_normal_agent_exit(state, issue_id, running_entry, session_id)
 
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
@@ -180,6 +175,20 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  def handle_info({:harness_gate_blocked, issue_id, metadata}, %{running: running} = state)
+      when is_binary(issue_id) and is_map(metadata) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        updated_running_entry = Map.put(running_entry, :harness_blocked, metadata)
+
+        notify_dashboard()
+        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+    end
+  end
+
   def handle_info(
         {:codex_worker_update, issue_id, %{event: _, timestamp: _} = update},
         %{running: running} = state
@@ -195,9 +204,11 @@ defmodule SymphonyElixir.Orchestrator do
           state
           |> apply_codex_token_delta(token_delta)
           |> apply_codex_rate_limits(update)
+          |> put_running_entry(issue_id, updated_running_entry)
+          |> maybe_stop_token_budget_exceeded(issue_id)
 
         notify_dashboard()
-        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+        {:noreply, state}
     end
   end
 
@@ -254,6 +265,13 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, {:missing_workflow_file, path, reason}} ->
         Logger.error("Missing WORKFLOW.md at #{path}: #{inspect(reason)}")
         state
+
+      {:error, {:linear_api_rate_limited, duration_ms}} ->
+        delay_ms = rate_limit_poll_delay(duration_ms, state.poll_interval_ms)
+
+        Logger.error("Linear API rate limit exceeded; backing off next poll for #{delay_ms}ms")
+
+        %{state | poll_interval_ms: delay_ms}
 
       {:error, :workflow_front_matter_not_a_map} ->
         Logger.error("Failed to parse WORKFLOW.md: workflow front matter must decode to a map")
@@ -331,6 +349,12 @@ defmodule SymphonyElixir.Orchestrator do
   @spec select_worker_host_for_test(term(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
   def select_worker_host_for_test(%State{} = state, preferred_worker_host) do
     select_worker_host(state, preferred_worker_host)
+  end
+
+  @doc false
+  @spec rate_limit_poll_delay_for_test(term(), pos_integer()) :: pos_integer()
+  def rate_limit_poll_delay_for_test(duration_ms, fallback_ms) do
+    rate_limit_poll_delay(duration_ms, fallback_ms)
   end
 
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
@@ -707,15 +731,20 @@ defmodule SymphonyElixir.Orchestrator do
             issue: issue,
             worker_host: worker_host,
             workspace_path: nil,
+            harness_blocked: nil,
             session_id: nil,
             last_codex_message: nil,
             last_codex_timestamp: nil,
             last_codex_event: nil,
             codex_app_server_pid: nil,
             codex_input_tokens: 0,
+            codex_cached_input_tokens: 0,
+            codex_uncached_input_tokens: 0,
             codex_output_tokens: 0,
+            codex_uncached_total_tokens: 0,
             codex_total_tokens: 0,
             codex_last_reported_input_tokens: 0,
+            codex_last_reported_cached_input_tokens: 0,
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
@@ -769,6 +798,147 @@ defmodule SymphonyElixir.Orchestrator do
         retry_attempts: Map.delete(state.retry_attempts, issue_id)
     }
   end
+
+  defp handle_normal_agent_exit(%State{} = state, issue_id, running_entry, session_id) do
+    cond do
+      Map.get(running_entry, :harness_blocked) ->
+        Logger.info("Agent task completed after Symphony harness blocker for issue_id=#{issue_id} session_id=#{session_id}; not running delivery evidence gate")
+
+        complete_issue(state, issue_id)
+
+      DeliveryEvidence.required?() ->
+        Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; running Symphony delivery evidence gate")
+
+        case DeliveryEvidence.finalize_issue(
+               Map.get(running_entry, :issue),
+               Map.get(running_entry, :workspace_path)
+             ) do
+          :ok ->
+            complete_issue(state, issue_id)
+
+          {:error, reason} ->
+            Logger.warning("Delivery evidence gate failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
+
+            complete_issue(state, issue_id)
+        end
+
+      Config.settings!().agent.continue_after_normal_exit ->
+        Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+
+        state
+        |> complete_issue(issue_id)
+        |> schedule_issue_retry(issue_id, 1, %{
+          identifier: running_entry.identifier,
+          delay_type: :continuation,
+          worker_host: Map.get(running_entry, :worker_host),
+          workspace_path: Map.get(running_entry, :workspace_path)
+        })
+
+      true ->
+        Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; not continuing because agent.continue_after_normal_exit=false")
+
+        complete_issue(state, issue_id)
+    end
+  end
+
+  defp put_running_entry(%State{} = state, issue_id, running_entry)
+       when is_binary(issue_id) and is_map(running_entry) do
+    %{state | running: Map.put(state.running, issue_id, running_entry)}
+  end
+
+  defp maybe_stop_token_budget_exceeded(%State{} = state, issue_id) when is_binary(issue_id) do
+    state
+    |> maybe_stop_total_token_budget_exceeded(issue_id)
+    |> maybe_stop_uncached_token_budget_exceeded(issue_id)
+  end
+
+  defp maybe_stop_total_token_budget_exceeded(%State{} = state, issue_id) when is_binary(issue_id) do
+    case Config.settings!().agent.max_total_tokens do
+      limit when is_integer(limit) and limit > 0 ->
+        case Map.get(state.running, issue_id) do
+          %{codex_total_tokens: total_tokens} when is_integer(total_tokens) and total_tokens >= limit ->
+            terminate_running_issue_for_token_budget(state, issue_id, limit, :total)
+
+          _ ->
+            state
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp maybe_stop_uncached_token_budget_exceeded(%State{} = state, issue_id)
+       when is_binary(issue_id) do
+    case Config.settings!().agent.max_uncached_tokens do
+      limit when is_integer(limit) and limit > 0 ->
+        maybe_stop_uncached_token_budget_for_limit(state, issue_id, limit)
+
+      _ ->
+        state
+    end
+  end
+
+  defp maybe_stop_uncached_token_budget_for_limit(%State{} = state, issue_id, limit) do
+    running_entry = Map.get(state.running, issue_id)
+    uncached_total_tokens = Map.get(running_entry || %{}, :codex_uncached_total_tokens, 0)
+
+    if is_map(running_entry) and uncached_total_tokens >= limit do
+      terminate_running_issue_for_token_budget(state, issue_id, limit, :uncached)
+    else
+      state
+    end
+  end
+
+  defp terminate_running_issue_for_token_budget(%State{} = state, issue_id, limit, budget_type) do
+    case Map.get(state.running, issue_id) do
+      nil ->
+        state
+
+      %{pid: pid, ref: ref} = running_entry ->
+        identifier = Map.get(running_entry, :identifier, issue_id)
+        session_id = running_entry_session_id(running_entry)
+        total_tokens = Map.get(running_entry, :codex_total_tokens, 0)
+        uncached_total_tokens = Map.get(running_entry, :codex_uncached_total_tokens, total_tokens)
+        budget_name = token_budget_name(budget_type)
+        budget_tokens = token_budget_tokens(budget_type, total_tokens, uncached_total_tokens)
+        budget_token_label = token_budget_token_label(budget_type)
+
+        Logger.warning(
+          "Issue exceeded #{budget_name}: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} total_tokens=#{total_tokens} uncached_total_tokens=#{uncached_total_tokens} #{budget_token_label}=#{budget_tokens} limit=#{limit}; stopping active agent without retry"
+        )
+
+        state = record_session_completion_totals(state, running_entry)
+
+        if is_pid(pid) do
+          terminate_task(pid)
+        end
+
+        if is_reference(ref) do
+          Process.demonitor(ref, [:flush])
+        end
+
+        %{
+          state
+          | running: Map.delete(state.running, issue_id),
+            claimed: MapSet.put(state.claimed, issue_id),
+            completed: MapSet.put(state.completed, issue_id),
+            retry_attempts: Map.delete(state.retry_attempts, issue_id)
+        }
+
+      _ ->
+        state
+    end
+  end
+
+  defp token_budget_name(:uncached), do: "agent.max_uncached_tokens"
+  defp token_budget_name(_budget_type), do: "agent.max_total_tokens"
+
+  defp token_budget_tokens(:uncached, _total_tokens, uncached_total_tokens), do: uncached_total_tokens
+  defp token_budget_tokens(_budget_type, total_tokens, _uncached_total_tokens), do: total_tokens
+
+  defp token_budget_token_label(:uncached), do: "budget_uncached_total_tokens"
+  defp token_budget_token_label(_budget_type), do: "budget_total_tokens"
 
   defp schedule_issue_retry(%State{} = state, issue_id, attempt, metadata)
        when is_binary(issue_id) and is_map(metadata) do
@@ -924,6 +1094,31 @@ defmodule SymphonyElixir.Orchestrator do
   defp release_issue_claim(%State{} = state, issue_id) do
     %{state | claimed: MapSet.delete(state.claimed, issue_id)}
   end
+
+  defp rate_limit_poll_delay(duration_ms, fallback_ms) do
+    duration_ms
+    |> positive_integer()
+    |> case do
+      duration when is_integer(duration) and duration > 0 ->
+        duration
+        |> min(@max_linear_rate_limit_poll_delay_ms)
+        |> max(fallback_ms)
+
+      _ ->
+        fallback_ms
+    end
+  end
+
+  defp positive_integer(value) when is_integer(value) and value > 0, do: value
+
+  defp positive_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer > 0 -> integer
+      _ -> nil
+    end
+  end
+
+  defp positive_integer(_value), do: nil
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
     if metadata[:delay_type] == :continuation and attempt == 1 do
@@ -1115,7 +1310,10 @@ defmodule SymphonyElixir.Orchestrator do
           session_id: metadata.session_id,
           codex_app_server_pid: metadata.codex_app_server_pid,
           codex_input_tokens: metadata.codex_input_tokens,
+          codex_cached_input_tokens: Map.get(metadata, :codex_cached_input_tokens, 0),
+          codex_uncached_input_tokens: Map.get(metadata, :codex_uncached_input_tokens, 0),
           codex_output_tokens: metadata.codex_output_tokens,
+          codex_uncached_total_tokens: Map.get(metadata, :codex_uncached_total_tokens, metadata.codex_total_tokens),
           codex_total_tokens: metadata.codex_total_tokens,
           turn_count: Map.get(metadata, :turn_count, 0),
           started_at: metadata.started_at,
@@ -1172,10 +1370,14 @@ defmodule SymphonyElixir.Orchestrator do
   defp integrate_codex_update(running_entry, %{event: event, timestamp: timestamp} = update) do
     token_delta = extract_token_delta(running_entry, update)
     codex_input_tokens = Map.get(running_entry, :codex_input_tokens, 0)
+    codex_cached_input_tokens = Map.get(running_entry, :codex_cached_input_tokens, 0)
+    codex_uncached_input_tokens = Map.get(running_entry, :codex_uncached_input_tokens, 0)
     codex_output_tokens = Map.get(running_entry, :codex_output_tokens, 0)
+    codex_uncached_total_tokens = Map.get(running_entry, :codex_uncached_total_tokens, 0)
     codex_total_tokens = Map.get(running_entry, :codex_total_tokens, 0)
     codex_app_server_pid = Map.get(running_entry, :codex_app_server_pid)
     last_reported_input = Map.get(running_entry, :codex_last_reported_input_tokens, 0)
+    last_reported_cached_input = Map.get(running_entry, :codex_last_reported_cached_input_tokens, 0)
     last_reported_output = Map.get(running_entry, :codex_last_reported_output_tokens, 0)
     last_reported_total = Map.get(running_entry, :codex_last_reported_total_tokens, 0)
     turn_count = Map.get(running_entry, :turn_count, 0)
@@ -1184,16 +1386,20 @@ defmodule SymphonyElixir.Orchestrator do
       Map.merge(running_entry, %{
         last_codex_timestamp: timestamp,
         last_codex_message: summarize_codex_update(update),
-        session_id: session_id_for_update(running_entry.session_id, update),
+        session_id: session_id_for_update(Map.get(running_entry, :session_id), update),
         last_codex_event: event,
         codex_app_server_pid: codex_app_server_pid_for_update(codex_app_server_pid, update),
         codex_input_tokens: codex_input_tokens + token_delta.input_tokens,
+        codex_cached_input_tokens: codex_cached_input_tokens + token_delta.cached_input_tokens,
+        codex_uncached_input_tokens: codex_uncached_input_tokens + token_delta.uncached_input_tokens,
         codex_output_tokens: codex_output_tokens + token_delta.output_tokens,
+        codex_uncached_total_tokens: codex_uncached_total_tokens + token_delta.uncached_total_tokens,
         codex_total_tokens: codex_total_tokens + token_delta.total_tokens,
         codex_last_reported_input_tokens: max(last_reported_input, token_delta.input_reported),
+        codex_last_reported_cached_input_tokens: max(last_reported_cached_input, token_delta.cached_input_reported),
         codex_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
         codex_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
-        turn_count: turn_count_for_update(turn_count, running_entry.session_id, update)
+        turn_count: turn_count_for_update(turn_count, Map.get(running_entry, :session_id), update)
       }),
       token_delta
     }
@@ -1336,7 +1542,20 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp apply_token_delta(codex_totals, token_delta) do
     input_tokens = Map.get(codex_totals, :input_tokens, 0) + token_delta.input_tokens
+
+    cached_input_tokens =
+      Map.get(codex_totals, :cached_input_tokens, 0) + Map.get(token_delta, :cached_input_tokens, 0)
+
+    uncached_input_tokens =
+      Map.get(codex_totals, :uncached_input_tokens, 0) +
+        Map.get(token_delta, :uncached_input_tokens, 0)
+
     output_tokens = Map.get(codex_totals, :output_tokens, 0) + token_delta.output_tokens
+
+    uncached_total_tokens =
+      Map.get(codex_totals, :uncached_total_tokens, 0) +
+        Map.get(token_delta, :uncached_total_tokens, 0)
+
     total_tokens = Map.get(codex_totals, :total_tokens, 0) + token_delta.total_tokens
 
     seconds_running =
@@ -1344,7 +1563,10 @@ defmodule SymphonyElixir.Orchestrator do
 
     %{
       input_tokens: max(0, input_tokens),
+      cached_input_tokens: max(0, cached_input_tokens),
+      uncached_input_tokens: max(0, uncached_input_tokens),
       output_tokens: max(0, output_tokens),
+      uncached_total_tokens: max(0, uncached_total_tokens),
       total_tokens: max(0, total_tokens),
       seconds_running: max(0, seconds_running)
     }
@@ -1363,6 +1585,12 @@ defmodule SymphonyElixir.Orchestrator do
       ),
       compute_token_delta(
         running_entry,
+        :cached_input,
+        usage,
+        :codex_last_reported_cached_input_tokens
+      ),
+      compute_token_delta(
+        running_entry,
         :output,
         usage,
         :codex_last_reported_output_tokens
@@ -1375,12 +1603,34 @@ defmodule SymphonyElixir.Orchestrator do
       )
     }
     |> Tuple.to_list()
-    |> then(fn [input, output, total] ->
+    |> then(fn [input, cached_input, output, total] ->
+      uncached_input =
+        compute_uncached_delta(
+          running_entry,
+          input.reported,
+          cached_input.reported,
+          :codex_last_reported_input_tokens,
+          :codex_last_reported_cached_input_tokens
+        )
+
+      uncached_total =
+        compute_uncached_delta(
+          running_entry,
+          total.reported,
+          cached_input.reported,
+          :codex_last_reported_total_tokens,
+          :codex_last_reported_cached_input_tokens
+        )
+
       %{
         input_tokens: input.delta,
+        cached_input_tokens: cached_input.delta,
+        uncached_input_tokens: uncached_input.delta,
         output_tokens: output.delta,
+        uncached_total_tokens: uncached_total.delta,
         total_tokens: total.delta,
         input_reported: input.reported,
+        cached_input_reported: cached_input.reported,
         output_reported: output.reported,
         total_reported: total.reported
       }
@@ -1402,6 +1652,15 @@ defmodule SymphonyElixir.Orchestrator do
       delta: max(delta, 0),
       reported: if(is_integer(next_total), do: next_total, else: prev_reported)
     }
+  end
+
+  defp compute_uncached_delta(running_entry, next_total, next_cached, total_reported_key, cached_reported_key) do
+    prev_total = Map.get(running_entry, total_reported_key, 0)
+    prev_cached = Map.get(running_entry, cached_reported_key, 0)
+    prev_uncached = max(prev_total - prev_cached, 0)
+    next_uncached = max(next_total - next_cached, 0)
+
+    %{delta: max(next_uncached - prev_uncached, 0), reported: next_uncached}
   end
 
   defp extract_token_usage(update) do
@@ -1553,21 +1812,25 @@ defmodule SymphonyElixir.Orchestrator do
   defp integer_token_map?(payload) do
     token_fields = [
       :input_tokens,
+      :cached_input_tokens,
       :output_tokens,
       :total_tokens,
       :prompt_tokens,
       :completion_tokens,
       :inputTokens,
+      :cachedInputTokens,
       :outputTokens,
       :totalTokens,
       :promptTokens,
       :completionTokens,
       "input_tokens",
+      "cached_input_tokens",
       "output_tokens",
       "total_tokens",
       "prompt_tokens",
       "completion_tokens",
       "inputTokens",
+      "cachedInputTokens",
       "outputTokens",
       "totalTokens",
       "promptTokens",
@@ -1593,6 +1856,15 @@ defmodule SymphonyElixir.Orchestrator do
         :promptTokens,
         "inputTokens",
         :inputTokens
+      ])
+
+  defp get_token_usage(usage, :cached_input),
+    do:
+      payload_get(usage, [
+        "cached_input_tokens",
+        :cached_input_tokens,
+        "cachedInputTokens",
+        :cachedInputTokens
       ])
 
   defp get_token_usage(usage, :output),

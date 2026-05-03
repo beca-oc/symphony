@@ -458,6 +458,39 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "Variable \\\"$ids\\\" got invalid value"
   end
 
+  test "linear client preserves rate limit duration for non-200 graphql responses" do
+    assert {:error, {:linear_api_rate_limited, 3_600_000}} =
+             Client.graphql(
+               "query Viewer { viewer { id } }",
+               %{},
+               request_fun: fn _payload, _headers ->
+                 {:ok,
+                  %{
+                    status: 400,
+                    body: %{
+                      "errors" => [
+                        %{
+                          "message" => "Rate limit exceeded",
+                          "extensions" => %{
+                            "code" => "RATELIMITED",
+                            "meta" => %{
+                              "rateLimitResult" => %{
+                                "allowed" => false,
+                                "duration" => 3_600_000,
+                                "limit" => 2_500,
+                                "remaining" => 0
+                              }
+                            }
+                          },
+                          "statusCode" => 429
+                        }
+                      ]
+                    }
+                  }}
+               end
+             )
+  end
+
   test "orchestrator sorts dispatch by priority then oldest created_at" do
     issue_same_priority_older = %Issue{
       id: "issue-old-high",
@@ -494,6 +527,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       ])
 
     assert Enum.map(sorted, & &1.identifier) == ["MT-200", "MT-201", "MT-199"]
+  end
+
+  test "orchestrator backs off poll delay for Linear rate limits" do
+    assert Orchestrator.rate_limit_poll_delay_for_test(3_600_000, 60_000) == 3_600_000
+    assert Orchestrator.rate_limit_poll_delay_for_test("60000", 5_000) == 60_000
+    assert Orchestrator.rate_limit_poll_delay_for_test(nil, 60_000) == 60_000
   end
 
   test "todo issue with non-terminal blocker is not dispatch-eligible" do
@@ -968,6 +1007,35 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     write_workflow_file!(Workflow.workflow_file_path(), worker_max_concurrent_agents_per_host: 2)
     assert :ok = Config.validate!()
     assert Config.settings!().worker.max_concurrent_agents_per_host == 2
+  end
+
+  test "config supports repo metadata and validation harness commands" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      repo_name: "ai-chatbot",
+      repo_github_repo: "Subconscious-ai/ai-chatbot",
+      repo_default_branch: "main",
+      validation_preflight: "pnpm -v && test -d node_modules",
+      validation_fast: "pnpm ci:quick",
+      validation_full: "pnpm ci:pr",
+      validation_deploy_evidence: "vercel",
+      validation_evidence_required: true
+    )
+
+    config = Config.settings!()
+
+    assert config.repo.name == "ai-chatbot"
+    assert config.repo.github_repo == "Subconscious-ai/ai-chatbot"
+    assert config.repo.default_branch == "main"
+    assert config.validation.preflight == "pnpm -v && test -d node_modules"
+    assert config.validation.fast == "pnpm ci:quick"
+    assert config.validation.full == "pnpm ci:pr"
+    assert config.validation.deploy_evidence == "vercel"
+    assert config.validation.evidence_required == true
+
+    write_workflow_file!(Workflow.workflow_file_path(), validation_deploy_evidence: "ftp")
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "validation.deploy_evidence"
   end
 
   test "schema helpers cover custom type and state limit validation" do
