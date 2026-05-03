@@ -35,7 +35,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
          {:ok, pr_url} <- create_or_find_pr(issue, settings, repo, branch),
          :ok <- ensure_symphony_label(repo),
          :ok <- add_symphony_label(repo, pr_url),
-         {:ok, pull_request} <- poll_pr(repo, pr_url) do
+         {:ok, pull_request} <- poll_pr_with_evidence(repo, pr_url, settings) do
       deployment_url = deployment_url(pull_request)
 
       evidence = %{
@@ -259,6 +259,47 @@ defmodule SymphonyElixir.DeliveryPublisher do
       {output, status} ->
         {:error, {:gh_pr_view_failed, status, truncate_output(output)}}
     end
+  end
+
+  defp poll_pr_with_evidence(repo, pr_url, settings) do
+    deadline = System.monotonic_time(:millisecond) + evidence_poll_timeout_ms()
+    poll_pr_with_evidence(repo, pr_url, evidence_required?(settings), deadline, nil)
+  end
+
+  defp poll_pr_with_evidence(repo, pr_url, evidence_required?, deadline, last_pull_request) do
+    case poll_pr(repo, pr_url) do
+      {:ok, pull_request} ->
+        cond do
+          not evidence_required? or is_binary(deployment_url(pull_request)) ->
+            {:ok, pull_request}
+
+          System.monotonic_time(:millisecond) >= deadline ->
+            {:ok, pull_request}
+
+          true ->
+            Process.sleep(evidence_poll_interval_ms())
+            poll_pr_with_evidence(repo, pr_url, evidence_required?, deadline, pull_request)
+        end
+
+      {:error, _reason} = error ->
+        case last_pull_request do
+          nil -> error
+          pull_request -> {:ok, pull_request}
+        end
+    end
+  end
+
+  defp evidence_required?(%{validation: %{deploy_evidence: deploy_evidence}}),
+    do: deploy_evidence in ["vercel", "github_checks"]
+
+  defp evidence_required?(_settings), do: false
+
+  defp evidence_poll_timeout_ms do
+    Application.get_env(:symphony_elixir, :delivery_publisher_poll_timeout_ms, 60_000)
+  end
+
+  defp evidence_poll_interval_ms do
+    Application.get_env(:symphony_elixir, :delivery_publisher_poll_interval_ms, 2_000)
   end
 
   defp deployment_url(pull_request) when is_map(pull_request) do
