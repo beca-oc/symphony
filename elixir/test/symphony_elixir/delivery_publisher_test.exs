@@ -1,0 +1,169 @@
+defmodule SymphonyElixir.DeliveryPublisherTest do
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.DeliveryPublisher
+
+  test "publisher turns a local committed branch into PR and Linear workpad evidence" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-publisher-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace = Path.join(test_root, "workspace")
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "README.md"), "# publisher\n")
+      System.cmd("git", ["-C", workspace, "init", "-b", "codex/BEC-99-marker"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "publisher evidence"])
+      System.cmd("git", ["-C", workspace, "remote", "add", "origin", "https://github.com/Subconscious-ai/example.git"])
+
+      {sha, 0} = System.cmd("git", ["-C", workspace, "rev-parse", "HEAD"])
+      sha = String.trim(sha)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repo_github_repo: "Subconscious-ai/example",
+        repo_default_branch: "main",
+        validation_fast: "printf 'fast validation passed\\n'",
+        validation_deploy_evidence: "vercel",
+        validation_evidence_required: true
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-publish",
+        identifier: "BEC-99",
+        title: "Publish delivery",
+        state: "In Progress",
+        url: "https://linear.app/example/issue/BEC-99/publish-delivery"
+      }
+
+      with_fake_gh_and_git(fn log_path ->
+        assert {:ok, evidence} = DeliveryPublisher.publish(issue, workspace)
+
+        assert evidence.branch == "codex/BEC-99-marker"
+        assert evidence.commit_sha == sha
+        assert evidence.pr_url == "https://github.com/Subconscious-ai/example/pull/99"
+        assert evidence.deployment_url == "https://vercel.com/example/preview"
+
+        assert_receive {:memory_tracker_comment, "issue-publish", body}, 500
+        assert body =~ "## Codex Workpad"
+        assert body =~ "Draft PR: https://github.com/Subconscious-ai/example/pull/99"
+        assert body =~ "Final commit SHA: `#{sha}`"
+        assert body =~ "Validation: `printf 'fast validation passed"
+        assert body =~ "fast validation passed"
+        assert body =~ "Deployment/Check: https://vercel.com/example/preview"
+
+        log = File.read!(log_path)
+        assert log =~ "push -u origin codex/BEC-99-marker"
+        assert log =~ "gh pr create --draft"
+        assert log =~ "gh api --method POST repos/Subconscious-ai/example/issues/99/labels"
+        assert log =~ "labels[]=symphony"
+        assert log =~ "gh pr view https://github.com/Subconscious-ai/example/pull/99"
+        assert log =~ "--json"
+      end)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  defp with_fake_gh_and_git(fun) do
+    unique = System.unique_integer([:positive, :monotonic])
+    root = Path.join(System.tmp_dir!(), "delivery-publisher-test-#{unique}")
+    bin_dir = Path.join(root, "bin")
+    log_path = Path.join(root, "commands.log")
+    real_git = System.find_executable("git")
+
+    try do
+      File.mkdir_p!(bin_dir)
+      File.write!(log_path, "")
+
+      File.write!(Path.join(bin_dir, "git"), fake_git_script())
+      File.chmod!(Path.join(bin_dir, "git"), 0o755)
+      File.write!(Path.join(bin_dir, "gh"), fake_gh_script())
+      File.chmod!(Path.join(bin_dir, "gh"), 0o755)
+
+      original_path = System.get_env("PATH") || ""
+
+      with_env(
+        %{
+          "PATH" => Enum.join([bin_dir, original_path], ":"),
+          "COMMAND_LOG" => log_path,
+          "REAL_GIT" => real_git
+        },
+        fn -> fun.(log_path) end
+      )
+    after
+      File.rm_rf!(root)
+    end
+  end
+
+  defp with_env(env, fun) do
+    old = Map.new(env, fn {key, _value} -> {key, System.get_env(key)} end)
+
+    try do
+      Enum.each(env, fn {key, value} -> System.put_env(key, value) end)
+      fun.()
+    after
+      Enum.each(old, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+    end
+  end
+
+  defp fake_git_script do
+    """
+    #!/bin/sh
+    printf 'git %s\\n' "$*" >> "$COMMAND_LOG"
+
+    if [ "$1" = "-C" ]; then
+      shift
+      workspace="$1"
+      shift
+
+      if [ "$1" = "push" ]; then
+        exit 0
+      fi
+
+      exec "$REAL_GIT" -C "$workspace" "$@"
+    fi
+
+    exec "$REAL_GIT" "$@"
+    """
+  end
+
+  defp fake_gh_script do
+    """
+    #!/bin/sh
+    printf 'gh %s\\n' "$*" >> "$COMMAND_LOG"
+
+    if [ "$1" = "label" ] && [ "$2" = "create" ]; then
+      exit 0
+    fi
+
+    if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+      printf 'https://github.com/Subconscious-ai/example/pull/99\\n'
+      exit 0
+    fi
+
+    if [ "$1" = "api" ]; then
+      exit 0
+    fi
+
+    if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+      cat <<'JSON'
+    {"url":"https://github.com/Subconscious-ai/example/pull/99","isDraft":true,"headRefOid":"ignored","labels":[{"name":"symphony"}],"statusCheckRollup":[{"__typename":"StatusContext","context":"Vercel","state":"SUCCESS","targetUrl":"https://vercel.com/example/preview"}]}
+    JSON
+      exit 0
+    fi
+
+    exit 99
+    """
+  end
+end

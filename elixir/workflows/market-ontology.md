@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "ai-chatbot-042ccd5f20ae"
+  project_slug: "market-ontology-1fcfdc980d0e"
   active_states:
     - Todo
     - In Progress
@@ -16,26 +16,38 @@ tracker:
 polling:
   interval_ms: 60000
 workspace:
-  root: ~/code/symphony-workspaces/ai-chatbot
+  root: ~/code/symphony-workspaces/market-ontology
 repo:
-  name: ai-chatbot
-  github_repo: Subconscious-ai/ai-chatbot
+  name: market-ontology
+  github_repo: Subconscious-ai/market-ontology
   default_branch: main
 hooks:
   timeout_ms: 600000
   after_create: |
     set -eu
-    git clone https://github.com/Subconscious-ai/ai-chatbot.git .
+    git clone https://github.com/Subconscious-ai/market-ontology.git .
     git config core.hooksPath /dev/null || true
-    pnpm install --frozen-lockfile
 validation:
   preflight: |
     set -eu
-    pnpm -v
-    test -d node_modules
-  fast: pnpm ci:quick
-  full: pnpm ci:pr
-  deploy_evidence: vercel
+    python3 --version
+  fast: |
+    set -eu
+    python3 scripts/validate_kg_seed.py
+    python3 scripts/generate_kg_seed_contract.py --check
+    python3 scripts/generate_twenty_app.py --check
+    python3 -m unittest discover -s tests -v
+    bash scripts/check-doc-rot.sh
+    python3 -m py_compile poc_v1/ontology/schema.py
+  full: |
+    set -eu
+    python3 scripts/validate_kg_seed.py
+    python3 scripts/generate_kg_seed_contract.py --check
+    python3 scripts/generate_twenty_app.py --check
+    python3 -m unittest discover -s tests -v
+    bash scripts/check-doc-rot.sh
+    python3 -m py_compile poc_v1/ontology/schema.py
+  deploy_evidence: github_checks
   evidence_required: true
 agent:
   max_concurrent_agents: 1
@@ -50,7 +62,7 @@ codex:
     type: dangerFullAccess
 ---
 
-You are working on Linear ticket `{{ issue.identifier }}` for the `ai-chatbot` repository.
+You are working on Linear ticket `{{ issue.identifier }}` for the `market-ontology` repository.
 
 Issue context:
 Identifier: {{ issue.identifier }}
@@ -68,14 +80,14 @@ No description provided.
 
 Worker contract:
 
-1. This is an unattended Symphony worker. Never ask a human to perform follow-up actions.
+1. Unattended Symphony worker: do not ask a human for follow-up.
 2. Work only in the provided repository copy.
 3. Do not call Linear tools, GitHub tools, `gh`, or `git push`.
 4. Do not create or update a Linear workpad comment.
 5. Create a local branch named `codex/{{ issue.identifier }}-<short-slug>`.
 6. Sync from `origin/main` before edits.
-7. Implement the smallest scoped change that satisfies the ticket; avoid unrelated refactors.
+7. Make the smallest scoped change; avoid unrelated refactors.
 8. Commit the local change with a clear message.
 9. Leave the workspace on the committed branch and stop.
 
-Symphony will run validation, push the branch, create the draft PR, label it, record Linear evidence, poll checks/deployment once, and move the issue to `Human Review` or `Rework`.
+Symphony will run validation, push the branch, create the draft PR, label it, record Linear evidence, poll checks once, and move the issue to `Human Review` or `Rework`.

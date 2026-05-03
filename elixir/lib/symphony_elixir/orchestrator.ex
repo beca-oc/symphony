@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, DeliveryEvidence, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, DeliveryEvidence, DeliveryPublisher, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -807,6 +807,19 @@ defmodule SymphonyElixir.Orchestrator do
         complete_issue(state, issue_id)
 
       DeliveryEvidence.required?() ->
+        Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; publishing delivery evidence")
+
+        case DeliveryPublisher.publish(
+               Map.get(running_entry, :issue),
+               Map.get(running_entry, :workspace_path)
+             ) do
+          {:ok, _evidence} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Delivery publisher failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
+        end
+
         Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; running Symphony delivery evidence gate")
 
         case DeliveryEvidence.finalize_issue(

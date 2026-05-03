@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "ai-chatbot-042ccd5f20ae"
+  project_slug: "causlio-71a996a4475b"
   active_states:
     - Todo
     - In Progress
@@ -16,16 +16,16 @@ tracker:
 polling:
   interval_ms: 60000
 workspace:
-  root: ~/code/symphony-workspaces/ai-chatbot
+  root: ~/code/symphony-workspaces/causl.io
 repo:
-  name: ai-chatbot
-  github_repo: Subconscious-ai/ai-chatbot
+  name: causl.io
+  github_repo: Subconscious-ai/causl.io
   default_branch: main
 hooks:
   timeout_ms: 600000
   after_create: |
     set -eu
-    git clone https://github.com/Subconscious-ai/ai-chatbot.git .
+    git clone https://github.com/Subconscious-ai/causl.io.git .
     git config core.hooksPath /dev/null || true
     pnpm install --frozen-lockfile
 validation:
@@ -33,8 +33,8 @@ validation:
     set -eu
     pnpm -v
     test -d node_modules
-  fast: pnpm ci:quick
-  full: pnpm ci:pr
+  fast: pnpm run verify:fast
+  full: pnpm run verify:full
   deploy_evidence: vercel
   evidence_required: true
 agent:
@@ -50,7 +50,7 @@ codex:
     type: dangerFullAccess
 ---
 
-You are working on Linear ticket `{{ issue.identifier }}` for the `ai-chatbot` repository.
+You are working on Linear ticket `{{ issue.identifier }}` for the `causl.io` repository.
 
 Issue context:
 Identifier: {{ issue.identifier }}
@@ -68,13 +68,13 @@ No description provided.
 
 Worker contract:
 
-1. This is an unattended Symphony worker. Never ask a human to perform follow-up actions.
+1. Unattended Symphony worker: do not ask a human for follow-up.
 2. Work only in the provided repository copy.
 3. Do not call Linear tools, GitHub tools, `gh`, or `git push`.
 4. Do not create or update a Linear workpad comment.
 5. Create a local branch named `codex/{{ issue.identifier }}-<short-slug>`.
 6. Sync from `origin/main` before edits.
-7. Implement the smallest scoped change that satisfies the ticket; avoid unrelated refactors.
+7. Make the smallest scoped change; avoid unrelated refactors.
 8. Commit the local change with a clear message.
 9. Leave the workspace on the committed branch and stop.
 

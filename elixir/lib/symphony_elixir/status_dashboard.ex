@@ -337,7 +337,12 @@ defmodule SymphonyElixir.StatusDashboard do
         project_link_lines = format_project_link_lines()
         project_refresh_line = format_project_refresh_line(Map.get(snapshot, :polling))
         codex_input_tokens = Map.get(codex_totals, :input_tokens, 0)
+        codex_cached_input_tokens = Map.get(codex_totals, :cached_input_tokens, 0)
         codex_output_tokens = Map.get(codex_totals, :output_tokens, 0)
+
+        codex_uncached_total_tokens =
+          Map.get(codex_totals, :uncached_total_tokens, codex_input_tokens + codex_output_tokens - codex_cached_input_tokens)
+
         codex_total_tokens = Map.get(codex_totals, :total_tokens, 0)
         codex_seconds_running = Map.get(codex_totals, :seconds_running, 0)
         agent_count = length(running)
@@ -357,9 +362,9 @@ defmodule SymphonyElixir.StatusDashboard do
            colorize("│ Runtime: ", @ansi_bold) <>
              colorize(format_runtime_seconds(codex_seconds_running), @ansi_magenta),
            colorize("│ Tokens: ", @ansi_bold) <>
-             colorize("in #{format_count(codex_input_tokens)}", @ansi_yellow) <>
+             colorize("uncached #{format_count(max(codex_uncached_total_tokens, 0))}", @ansi_yellow) <>
              colorize(" | ", @ansi_gray) <>
-             colorize("out #{format_count(codex_output_tokens)}", @ansi_yellow) <>
+             colorize("cached #{format_count(codex_cached_input_tokens)}", @ansi_yellow) <>
              colorize(" | ", @ansi_gray) <>
              colorize("total #{format_count(codex_total_tokens)}", @ansi_yellow),
            colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
@@ -594,13 +599,15 @@ defmodule SymphonyElixir.StatusDashboard do
     session = running_entry.session_id |> compact_session_id() |> format_cell(@running_session_width)
     pid = format_cell(running_entry.codex_app_server_pid || "n/a", @running_pid_width)
     total_tokens = running_entry.codex_total_tokens || 0
+    cached_input_tokens = running_entry.codex_cached_input_tokens || 0
+    uncached_total_tokens = running_entry.codex_uncached_total_tokens || max(total_tokens - cached_input_tokens, 0)
     runtime_seconds = running_entry.runtime_seconds || 0
     turn_count = Map.get(running_entry, :turn_count, 0)
     age = format_cell(format_runtime_and_turns(runtime_seconds, turn_count), @running_age_width)
     event = running_entry.last_codex_event || "none"
     event_label = format_cell(summarize_message(running_entry.last_codex_message), running_event_width)
 
-    tokens = format_count(total_tokens) |> format_cell(@running_tokens_width, :right)
+    tokens = format_count(uncached_total_tokens) |> format_cell(@running_tokens_width, :right)
 
     status_color =
       case event do
