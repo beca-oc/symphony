@@ -28,25 +28,9 @@ hooks:
     git clone https://github.com/Subconscious-ai/market-ontology.git .
     git config core.hooksPath /dev/null || true
 validation:
-  preflight: |
-    set -eu
-    python3 --version
-  fast: |
-    set -eu
-    python3 scripts/validate_kg_seed.py
-    python3 scripts/generate_kg_seed_contract.py --check
-    python3 scripts/generate_twenty_app.py --check
-    python3 -m unittest discover -s tests -v
-    bash scripts/check-doc-rot.sh
-    python3 -m py_compile poc_v1/ontology/schema.py
-  full: |
-    set -eu
-    python3 scripts/validate_kg_seed.py
-    python3 scripts/generate_kg_seed_contract.py --check
-    python3 scripts/generate_twenty_app.py --check
-    python3 -m unittest discover -s tests -v
-    bash scripts/check-doc-rot.sh
-    python3 -m py_compile poc_v1/ontology/schema.py
+  preflight: bash scripts/agent/preflight.sh
+  fast: bash scripts/agent/validate-fast.sh
+  full: bash scripts/agent/validate-full.sh
   deploy_evidence: github_checks
   evidence_required: true
 agent:

@@ -27,14 +27,11 @@ hooks:
     set -eu
     git clone https://github.com/Subconscious-ai/ai-chatbot.git .
     git config core.hooksPath /dev/null || true
-    pnpm install --frozen-lockfile
+    bash scripts/agent/preflight.sh
 validation:
-  preflight: |
-    set -eu
-    pnpm -v
-    test -d node_modules
-  fast: pnpm ci:quick
-  full: pnpm ci:pr
+  preflight: bash scripts/agent/preflight.sh
+  fast: bash scripts/agent/validate-fast.sh
+  full: bash scripts/agent/validate-full.sh
   deploy_evidence: vercel
   evidence_required: true
 agent:

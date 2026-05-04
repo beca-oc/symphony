@@ -28,12 +28,9 @@ hooks:
     git clone https://github.com/Subconscious-ai/spice-harvester.git .
     git config core.hooksPath /dev/null || true
 validation:
-  preflight: |
-    set -eu
-    python3 --version
-    bash --version >/dev/null
-  fast: python3 -m py_compile lib/*.py && bash -n run.sh lib/*.sh && bash scripts/check-doc-rot.sh
-  full: bash eval/regression.sh
+  preflight: bash scripts/agent/preflight.sh
+  fast: bash scripts/agent/validate-fast.sh
+  full: bash scripts/agent/validate-full.sh
   deploy_evidence: github_checks
   evidence_required: true
 agent:
