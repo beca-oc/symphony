@@ -67,6 +67,55 @@ defmodule SymphonyElixir.RunTraceTest do
     end
   end
 
+  test "record promotes delivery evidence and checker report into top-level telemetry" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-run-trace-evidence-#{System.unique_integer([:positive])}")
+    trace_file = Path.join(test_root, "runs.ndjson")
+    old_trace_file = Application.get_env(:symphony_elixir, :run_trace_file)
+
+    try do
+      Application.put_env(:symphony_elixir, :run_trace_file, trace_file)
+
+      RunTrace.record(
+        %{
+          identifier: "BEC-124",
+          issue: %Issue{id: "issue-124", identifier: "BEC-124", state: "Todo"},
+          started_at: DateTime.utc_now(),
+          codex_total_tokens: 10
+        },
+        :human_review,
+        :none,
+        %{
+          delivery_evidence: %{
+            pr_url: "https://github.com/Subconscious-ai/example/pull/124",
+            deployment_url: "https://github.com/Subconscious-ai/example/actions/runs/124/job/1",
+            branch: "codex/BEC-124-marker",
+            commit_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          checker: %{
+            passed: true,
+            failure_bucket: :none,
+            failures: [],
+            observed_checks: [%{name: "symphony-gate", state: :success}],
+            required_checks: ["symphony-gate"]
+          }
+        }
+      )
+
+      [line] = trace_file |> File.read!() |> String.trim() |> String.split("\n")
+      assert {:ok, payload} = Jason.decode(line)
+      assert payload["pr_url"] == "https://github.com/Subconscious-ai/example/pull/124"
+      assert payload["check_url"] == "https://github.com/Subconscious-ai/example/actions/runs/124/job/1"
+      assert payload["delivery_evidence"]["branch"] == "codex/BEC-124-marker"
+      assert payload["checker"]["passed"] == true
+      assert payload["checker"]["failure_bucket"] == "none"
+      assert payload["checker"]["observed_checks"] == [%{"name" => "symphony-gate", "state" => "success"}]
+      assert payload["checker"]["required_checks"] == ["symphony-gate"]
+    after
+      restore_app_env(:run_trace_file, old_trace_file)
+      File.rm_rf(test_root)
+    end
+  end
+
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
 end

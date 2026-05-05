@@ -540,6 +540,7 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
       )
 
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
       Application.put_env(:symphony_elixir, :memory_tracker_comments, %{
         "issue-finalize-resume" => ["## Symphony Evidence Gate\n\nResult: passed"]
       })
@@ -667,6 +668,89 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
     after
       restore_app_env(:delivery_evidence_poll_timeout_ms, old_timeout)
       restore_app_env(:delivery_evidence_poll_interval_ms, old_interval)
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "finalize_issue_with_report returns auditable checker telemetry and comments required checks" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-finalize-report-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {workspace, sha} = committed_workspace!(test_root, "codex/BEC-52-marker")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        validation_deploy_evidence: "github_checks",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate", "static-checks"]
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-finalize-report",
+        identifier: "BEC-52",
+        title: "Finalize report delivery",
+        state: "In Progress"
+      }
+
+      workpad = """
+      ## Codex Workpad
+
+      Validation: bash scripts/agent/validate-fast.sh passed
+      PR: https://github.com/Subconscious-ai/example/pull/52
+      Check: https://github.com/Subconscious-ai/example/actions/runs/52/job/1
+      """
+
+      pull_request = %{
+        "url" => "https://github.com/Subconscious-ai/example/pull/52",
+        "isDraft" => true,
+        "headRefOid" => sha,
+        "title" => "BEC-52 finalization",
+        "body" => "Refs BEC-52",
+        "labels" => [%{"name" => "symphony"}],
+        "statusCheckRollup" => [
+          %{
+            "__typename" => "CheckRun",
+            "name" => "symphony-gate",
+            "status" => "COMPLETED",
+            "conclusion" => "SUCCESS",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/52/job/1"
+          },
+          %{
+            "__typename" => "CheckRun",
+            "name" => "static-checks",
+            "status" => "COMPLETED",
+            "conclusion" => "SUCCESS",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/52/job/2"
+          }
+        ]
+      }
+
+      assert {:ok, report} =
+               DeliveryEvidence.finalize_issue_with_report(issue, workspace,
+                 comments: [workpad],
+                 pull_request: pull_request
+               )
+
+      assert report.checker.passed == true
+      assert report.checker.failure_bucket == :none
+      assert report.checker.required_checks == ["symphony-gate", "static-checks"]
+      assert Enum.map(report.checker.observed_checks, & &1.name) == ["symphony-gate", "static-checks"]
+      assert Enum.all?(report.checker.observed_checks, &(&1.state == :success))
+
+      assert_receive {:memory_tracker_comment, "issue-finalize-report", pass_comment}, 500
+      assert pass_comment =~ "### Checker"
+      assert pass_comment =~ "- Required checks: symphony-gate, static-checks"
+      assert pass_comment =~ "- Observed checks:"
+      assert pass_comment =~ "symphony-gate: success"
+      assert pass_comment =~ "static-checks: success"
+      assert_receive {:memory_tracker_state_update, "issue-finalize-report", "Human Review"}, 500
+    after
       File.rm_rf(test_root)
     end
   end

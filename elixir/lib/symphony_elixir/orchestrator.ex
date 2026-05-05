@@ -818,31 +818,56 @@ defmodule SymphonyElixir.Orchestrator do
       DeliveryEvidence.required?() ->
         Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; publishing delivery evidence")
 
-        case DeliveryPublisher.publish(
-               Map.get(running_entry, :issue),
-               Map.get(running_entry, :workspace_path)
-             ) do
-          {:ok, _evidence} ->
-            :ok
+        publisher_evidence =
+          case DeliveryPublisher.publish(
+                 Map.get(running_entry, :issue),
+                 Map.get(running_entry, :workspace_path)
+               ) do
+            {:ok, evidence} ->
+              evidence
 
-          {:error, reason} ->
-            Logger.warning("Delivery publisher failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
-        end
+            {:error, reason} ->
+              Logger.warning("Delivery publisher failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
+              nil
+          end
 
         Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; running Symphony delivery evidence gate")
 
-        case DeliveryEvidence.finalize_issue(
+        case DeliveryEvidence.finalize_issue_with_report(
                Map.get(running_entry, :issue),
                Map.get(running_entry, :workspace_path)
              ) do
-          :ok ->
-            RunTrace.record(running_entry, :human_review, :none, %{gate: :delivery_evidence})
+          {:ok, report} ->
+            RunTrace.record(
+              running_entry,
+              :human_review,
+              :none,
+              delivery_trace_details(:delivery_evidence, publisher_evidence, report)
+            )
+
+            complete_issue(state, issue_id)
+
+          {:error, %{failures: failures} = report} ->
+            Logger.warning("Delivery evidence gate failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(failures)}")
+
+            RunTrace.record(
+              running_entry,
+              :rework,
+              failure_bucket({:evidence_gate_failed, failures}),
+              delivery_trace_details({:evidence_gate_failed, failures}, publisher_evidence, report)
+            )
+
             complete_issue(state, issue_id)
 
           {:error, reason} ->
             Logger.warning("Delivery evidence gate failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
 
-            RunTrace.record(running_entry, :rework, failure_bucket(reason), %{reason: reason})
+            RunTrace.record(
+              running_entry,
+              :rework,
+              failure_bucket(reason),
+              delivery_trace_details(reason, publisher_evidence, %{})
+            )
 
             complete_issue(state, issue_id)
         end
@@ -873,6 +898,38 @@ defmodule SymphonyElixir.Orchestrator do
   defp put_running_entry(%State{} = state, issue_id, running_entry)
        when is_binary(issue_id) and is_map(running_entry) do
     %{state | running: Map.put(state.running, issue_id, running_entry)}
+  end
+
+  defp delivery_trace_details(reason, publisher_evidence, report) do
+    %{
+      gate: :delivery_evidence,
+      reason: reason,
+      delivery_evidence: delivery_evidence_payload(publisher_evidence, report),
+      checker: Map.get(report, :checker)
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp delivery_evidence_payload(_publisher_evidence, %{evidence: evidence}) when is_map(evidence) do
+    compact_delivery_evidence(evidence)
+  end
+
+  defp delivery_evidence_payload(evidence, _report) when is_map(evidence) do
+    compact_delivery_evidence(evidence)
+  end
+
+  defp delivery_evidence_payload(_evidence, _report), do: nil
+
+  defp compact_delivery_evidence(evidence) when is_map(evidence) do
+    %{
+      branch: Map.get(evidence, :branch) || Map.get(evidence, "branch"),
+      commit_sha: Map.get(evidence, :commit_sha) || Map.get(evidence, "commit_sha"),
+      pr_url: Map.get(evidence, :pr_url) || Map.get(evidence, "pr_url"),
+      deployment_url: Map.get(evidence, :deployment_url) || Map.get(evidence, "deployment_url")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
   end
 
   defp maybe_stop_token_budget_exceeded(%State{} = state, issue_id) when is_binary(issue_id) do

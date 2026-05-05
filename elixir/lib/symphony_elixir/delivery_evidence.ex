@@ -16,7 +16,8 @@ defmodule SymphonyElixir.DeliveryEvidence do
           commit_sha: String.t(),
           pr_url: String.t() | nil,
           deployment_url: String.t() | nil,
-          workpad: String.t()
+          workpad: String.t(),
+          checker: map()
         }
 
   @type report :: %{failures: [String.t()], evidence: map()}
@@ -29,13 +30,31 @@ defmodule SymphonyElixir.DeliveryEvidence do
   @spec finalize_issue(Issue.t(), Path.t() | nil, keyword()) :: :ok | {:error, term()}
   def finalize_issue(%Issue{} = issue, workspace, opts \\ []) do
     if required?() do
+      case finalize_issue_with_report(issue, workspace, opts) do
+        {:ok, _report} -> :ok
+        {:error, %{failures: failures}} -> {:error, {:evidence_gate_failed, failures}}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  @spec finalize_issue_with_report(Issue.t(), Path.t() | nil, keyword()) ::
+          {:ok, map()} | {:error, report()} | {:error, term()}
+  def finalize_issue_with_report(%Issue{} = issue, workspace, opts \\ []) do
+    if required?() do
       case poll_evaluation_for_issue(issue, workspace, opts) do
-        {:ok, evidence} -> approve_issue(issue, evidence)
+        {:ok, evidence} -> approve_issue_with_report(issue, evidence)
         {:error, report} -> block_issue(issue, report)
         {:fetch_error, reason} -> {:error, reason}
       end
     else
-      :ok
+      {:ok,
+       %{
+         evidence: %{},
+         checker: %{passed: true, failure_bucket: :none, failures: [], required_checks: [], observed_checks: []}
+       }}
     end
   end
 
@@ -88,10 +107,16 @@ defmodule SymphonyElixir.DeliveryEvidence do
     end
   end
 
-  defp approve_issue(%Issue{id: issue_id}, evidence) do
+  defp approve_issue_with_report(%Issue{id: issue_id}, evidence) do
     case create_comment_once(issue_id, "## Symphony Evidence Gate", success_comment(evidence)) do
-      :ok -> Tracker.update_issue_state(issue_id, "Human Review")
-      {:error, reason} -> {:error, reason}
+      :ok ->
+        case Tracker.update_issue_state(issue_id, "Human Review") do
+          :ok -> {:ok, %{evidence: evidence, checker: evidence.checker}}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -99,7 +124,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
     case create_comment_once(issue_id, "## Symphony Harness Blocker", blocker_comment(report)) do
       :ok ->
         case Tracker.update_issue_state(issue_id, "Rework") do
-          :ok -> {:error, {:evidence_gate_failed, report.failures}}
+          :ok -> {:error, report}
           {:error, reason} -> {:error, reason}
         end
 
@@ -178,7 +203,8 @@ defmodule SymphonyElixir.DeliveryEvidence do
       commit_sha: commit_sha,
       pr_url: pr_url,
       deployment_url: deployment_url,
-      workpad: workpad
+      workpad: workpad,
+      checker: %{}
     }
 
     failures =
@@ -191,6 +217,8 @@ defmodule SymphonyElixir.DeliveryEvidence do
       |> require_check_or_deployment_evidence(deployment_url)
       |> require_pr_checks(pull_request)
       |> Enum.reverse()
+
+    evidence = %{evidence | checker: checker_report(pull_request, failures)}
 
     case failures do
       [] -> {:ok, evidence}
@@ -209,7 +237,9 @@ defmodule SymphonyElixir.DeliveryEvidence do
 
   defp pull_request_for_workspace(workspace, opts) do
     case Keyword.fetch(opts, :pull_request) do
-      {:ok, pull_request} -> pull_request
+      {:ok, pull_request} ->
+        pull_request
+
       :error ->
         case Keyword.fetch(opts, :pull_request_fetcher) do
           {:ok, fetcher} when is_function(fetcher, 0) -> fetcher.()
@@ -462,6 +492,41 @@ defmodule SymphonyElixir.DeliveryEvidence do
     map_get(check, :name) || map_get(check, :context) || "unknown"
   end
 
+  defp checker_report(pull_request, failures) do
+    %{
+      passed: failures == [],
+      failure_bucket: if(failures == [], do: :none, else: failure_bucket(failures)),
+      failures: failures,
+      required_checks: required_check_names(),
+      observed_checks: observed_check_summaries(pull_request)
+    }
+  end
+
+  defp required_check_names do
+    case Config.settings!().evidence_gate.github_required_checks do
+      checks when is_list(checks) -> checks
+      _ -> []
+    end
+  end
+
+  defp observed_check_summaries(pull_request) do
+    pull_request
+    |> status_check_rollup()
+    |> Enum.map(fn check ->
+      %{
+        name: check_name(check),
+        state: check_state(check),
+        url: check_url(check)
+      }
+    end)
+  end
+
+  defp check_url(check) when is_map(check) do
+    map_get(check, :targetUrl) || map_get(check, :detailsUrl)
+  end
+
+  defp check_url(_check), do: nil
+
   defp deployment_url(comments, pull_request) do
     deployment_url_from_comments(comments) || deployment_url_from_pr(pull_request)
   end
@@ -535,6 +600,11 @@ defmodule SymphonyElixir.DeliveryEvidence do
     - Check/Deploy URL: #{evidence.deployment_url || "n/a"}
     - Failure bucket: none
 
+    ### Checker
+    - Required checks: #{checker_required_checks(evidence.checker)}
+    - Observed checks:
+    #{checker_observed_checks(evidence.checker)}
+
     Symphony moved this issue to Human Review after verifying required delivery evidence.
     """
   end
@@ -553,7 +623,33 @@ defmodule SymphonyElixir.DeliveryEvidence do
 
     #{failures}
 
+    ### Checker
+    - Required checks: #{checker_required_checks(report.evidence.checker)}
+    - Observed checks:
+    #{checker_observed_checks(report.evidence.checker)}
+
     Symphony moved this issue to Rework because required delivery evidence is incomplete.
     """
   end
+
+  defp checker_required_checks(%{required_checks: []}), do: "none configured"
+
+  defp checker_required_checks(%{required_checks: checks}) when is_list(checks) do
+    Enum.join(checks, ", ")
+  end
+
+  defp checker_required_checks(_checker), do: "none configured"
+
+  defp checker_observed_checks(%{observed_checks: []}), do: "    - none reported"
+
+  defp checker_observed_checks(%{observed_checks: checks}) when is_list(checks) do
+    checks
+    |> Enum.map(fn check ->
+      url = if is_binary(check.url), do: " (#{check.url})", else: ""
+      "    - #{check.name}: #{check.state}#{url}"
+    end)
+    |> Enum.join("\n")
+  end
+
+  defp checker_observed_checks(_checker), do: "    - none reported"
 end

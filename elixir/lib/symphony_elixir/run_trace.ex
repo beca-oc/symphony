@@ -108,11 +108,29 @@ defmodule SymphonyElixir.RunTrace do
   end
 
   defp merge_detail_evidence(payload, details) when is_map(payload) and is_map(details) do
+    delivery_evidence = map_value(details, "delivery_evidence")
+    checker = map_value(details, "checker")
+
     payload
     |> maybe_put_detail_value(:pr_url, details, "pr_url")
+    |> maybe_put_detail_value(:pr_url, delivery_evidence, "pr_url")
     |> maybe_put_detail_value(:check_url, details, "check_url")
+    |> maybe_put_detail_value(:check_url, delivery_evidence, "deployment_url")
+    |> maybe_put_map(:delivery_evidence, delivery_evidence)
+    |> maybe_put_map(:checker, checker)
     |> maybe_put_manual_rescue_count(details)
   end
+
+  defp map_value(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      value when is_map(value) -> value
+      _ -> %{}
+    end
+  end
+
+  defp maybe_put_map(payload, _key, value) when value == %{}, do: payload
+  defp maybe_put_map(payload, key, value) when is_map(value), do: Map.put(payload, key, value)
+  defp maybe_put_map(payload, _key, _value), do: payload
 
   defp maybe_put_detail_value(payload, payload_key, details, details_key) do
     if present?(Map.get(payload, payload_key)) do
@@ -163,6 +181,7 @@ defmodule SymphonyElixir.RunTrace do
 
   defp sanitize(value) when is_tuple(value), do: value |> Tuple.to_list() |> sanitize()
   defp sanitize(value) when is_list(value), do: Enum.map(value, &sanitize/1)
+  defp sanitize(value) when is_boolean(value), do: value
   defp sanitize(value) when is_atom(value), do: to_string(value)
   defp sanitize(value), do: value
 end
