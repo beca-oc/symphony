@@ -359,6 +359,15 @@ defmodule SymphonyElixir.Orchestrator do
     rate_limit_poll_delay(duration_ms, fallback_ms)
   end
 
+  @doc false
+  @spec resume_existing_delivery_for_test(State.t(), Issue.t()) :: State.t()
+  def resume_existing_delivery_for_test(%State{} = state, %Issue{} = issue) do
+    case resume_existing_delivery(state, issue, nil) do
+      {:resumed, resumed_state} -> resumed_state
+      :no_resume -> state
+    end
+  end
+
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
 
   defp reconcile_running_issue_states([issue | rest], state, active_states, terminal_states) do
@@ -704,16 +713,134 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
-    recipient = self()
+    case resume_existing_delivery(state, issue, preferred_worker_host) do
+      {:resumed, resumed_state} ->
+        resumed_state
 
-    case select_worker_host(state, preferred_worker_host) do
-      :no_worker_capacity ->
-        Logger.debug("No SSH worker slots available for #{issue_context(issue)} preferred_worker_host=#{inspect(preferred_worker_host)}")
-        state
+      :no_resume ->
+        recipient = self()
 
-      worker_host ->
-        spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host)
+        case select_worker_host(state, preferred_worker_host) do
+          :no_worker_capacity ->
+            Logger.debug("No SSH worker slots available for #{issue_context(issue)} preferred_worker_host=#{inspect(preferred_worker_host)}")
+            state
+
+          worker_host ->
+            spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host)
+        end
     end
+  end
+
+  defp resume_existing_delivery(%State{} = state, %Issue{} = issue, nil) do
+    with true <- DeliveryEvidence.required?(),
+         {:ok, workspace} <- Workspace.path_for_issue(issue, nil),
+         true <- File.dir?(workspace),
+         :ok <- committed_resume_workspace?(issue, workspace) do
+      Logger.info("Resuming completed workspace delivery after restart: #{issue_context(issue)} workspace=#{workspace}")
+
+      running_entry = %{
+        identifier: issue.identifier,
+        issue_id: issue.id,
+        issue: issue,
+        workspace_path: workspace,
+        worker_host: nil,
+        retry_attempt: 0,
+        turn_count: 0,
+        started_at: DateTime.utc_now()
+      }
+
+      {:resumed,
+       state
+       |> Map.update!(:claimed, &MapSet.put(&1, issue.id))
+       |> publish_and_finalize_existing_delivery(issue, workspace, running_entry)}
+    else
+      _ -> :no_resume
+    end
+  end
+
+  defp resume_existing_delivery(_state, _issue, _worker_host), do: :no_resume
+
+  defp committed_resume_workspace?(%Issue{} = issue, workspace) when is_binary(workspace) do
+    branch = git_value(workspace, ["rev-parse", "--abbrev-ref", "HEAD"])
+    commit_sha = git_value(workspace, ["rev-parse", "HEAD"])
+
+    cond do
+      not (is_binary(branch) and String.starts_with?(branch, "codex/#{issue.identifier}")) ->
+        :no_resume
+
+      not (is_binary(commit_sha) and byte_size(commit_sha) == 40) ->
+        :no_resume
+
+      not clean_git_workspace?(workspace) ->
+        :no_resume
+
+      true ->
+        :ok
+    end
+  end
+
+  defp publish_and_finalize_existing_delivery(%State{} = state, %Issue{} = issue, workspace, running_entry) do
+    publisher_evidence =
+      case DeliveryPublisher.publish(issue, workspace) do
+        {:ok, evidence} ->
+          evidence
+
+        {:error, reason} ->
+          Logger.warning("Restart/resume delivery publisher failed for #{issue_context(issue)}: #{inspect(reason)}")
+          nil
+      end
+
+    case DeliveryEvidence.finalize_issue_with_report(issue, workspace) do
+      {:ok, report} ->
+        RunTrace.record(
+          running_entry,
+          :human_review,
+          :none,
+          delivery_trace_details(:restart_resume_delivery, publisher_evidence, report)
+        )
+
+        complete_issue(state, issue.id)
+
+      {:error, %{failures: failures} = report} ->
+        Logger.warning("Restart/resume evidence gate failed for #{issue_context(issue)}: #{inspect(failures)}")
+
+        RunTrace.record(
+          running_entry,
+          :rework,
+          failure_bucket({:evidence_gate_failed, failures}),
+          delivery_trace_details({:evidence_gate_failed, failures}, publisher_evidence, report)
+        )
+
+        complete_issue(state, issue.id)
+
+      {:error, reason} ->
+        Logger.warning("Restart/resume evidence gate failed for #{issue_context(issue)}: #{inspect(reason)}")
+
+        RunTrace.record(
+          running_entry,
+          :rework,
+          failure_bucket(reason),
+          delivery_trace_details(reason, publisher_evidence, %{})
+        )
+
+        complete_issue(state, issue.id)
+    end
+  end
+
+  defp git_value(workspace, args) when is_binary(workspace) and is_list(args) do
+    case System.cmd("git", ["-C", workspace | args], stderr_to_stdout: true) do
+      {output, 0} -> String.trim(output)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp clean_git_workspace?(workspace) do
+    match?({_output, 0}, System.cmd("git", ["-C", workspace, "diff", "--quiet"], stderr_to_stdout: true)) and
+      match?({_output, 0}, System.cmd("git", ["-C", workspace, "diff", "--cached", "--quiet"], stderr_to_stdout: true))
+  rescue
+    _ -> false
   end
 
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do

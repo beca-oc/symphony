@@ -616,6 +616,72 @@ defmodule SymphonyElixir.CoreTest do
     assert state.retry_attempts == %{}
   end
 
+  test "restart resume finalizes committed workspace without launching a new agent" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-restart-resume-#{System.unique_integer([:positive])}")
+    workspace_root = Path.join(test_root, "workspaces")
+    workspace = Path.join(workspace_root, "BEC-200")
+    remote = Path.join(test_root, "origin.git")
+
+    try do
+      File.mkdir_p!(workspace)
+      File.mkdir_p!(workspace_root)
+      System.cmd("git", ["init", "--bare", remote])
+      System.cmd("git", ["-C", workspace, "init", "-b", "codex/BEC-200-restart-resume"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(workspace, "README.md"), "# restart resume\n")
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "restart resume evidence"])
+      System.cmd("git", ["-C", workspace, "remote", "add", "origin", remote])
+
+      {sha, 0} = System.cmd("git", ["-C", workspace, "rev-parse", "HEAD"])
+      sha = String.trim(sha)
+
+      issue = %Issue{
+        id: "issue-restart-resume",
+        identifier: "BEC-200",
+        title: "Restart resume committed delivery",
+        state: "In Progress",
+        url: "https://linear.app/example/issue/BEC-200/restart-resume"
+      }
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        repo_github_repo: "Subconscious-ai/example",
+        repo_default_branch: "main",
+        validation_fast: "printf 'fast validation passed\\n'",
+        validation_deploy_evidence: "none",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"]
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      with_fake_resume_gh(sha, fn _log_path ->
+        state = Orchestrator.resume_existing_delivery_for_test(%Orchestrator.State{}, issue)
+
+        assert MapSet.member?(state.completed, "issue-restart-resume")
+        assert state.running == %{}
+        assert MapSet.member?(state.claimed, "issue-restart-resume")
+
+        assert_receive {:memory_tracker_comment, "issue-restart-resume", workpad}, 500
+        assert workpad =~ "## Codex Workpad"
+        assert workpad =~ "Draft PR: https://github.com/Subconscious-ai/example/pull/200"
+        assert workpad =~ "Final commit SHA: `#{sha}`"
+
+        assert_receive {:memory_tracker_comment, "issue-restart-resume", evidence_gate}, 500
+        assert evidence_gate =~ "## Symphony Evidence Gate"
+        assert evidence_gate =~ "Result: passed"
+        assert evidence_gate =~ "https://github.com/Subconscious-ai/example/actions/runs/200/job/201"
+
+        assert_receive {:memory_tracker_state_update, "issue-restart-resume", "Human Review"}, 500
+      end)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "codex token updates stop a running issue that exceeds max_total_tokens" do
     write_workflow_file!(Workflow.workflow_file_path(), max_total_tokens: 10)
 
@@ -687,6 +753,66 @@ defmodule SymphonyElixir.CoreTest do
     assert state.retry_attempts == %{}
     refute Process.alive?(agent_pid)
     assert state.codex_totals.total_tokens == 11
+  end
+
+  defp with_fake_resume_gh(head_sha, fun) do
+    unique = System.unique_integer([:positive, :monotonic])
+    root = Path.join(System.tmp_dir!(), "orchestrator-resume-gh-#{unique}")
+    bin_dir = Path.join(root, "bin")
+    log_path = Path.join(root, "commands.log")
+    original_path = System.get_env("PATH") || ""
+    old_head_sha = System.get_env("FAKE_GH_HEAD_SHA")
+    old_command_log = System.get_env("COMMAND_LOG")
+
+    try do
+      File.mkdir_p!(bin_dir)
+      File.write!(log_path, "")
+      File.write!(Path.join(bin_dir, "gh"), fake_resume_gh_script())
+      File.chmod!(Path.join(bin_dir, "gh"), 0o755)
+
+      System.put_env("PATH", Enum.join([bin_dir, original_path], ":"))
+      System.put_env("COMMAND_LOG", log_path)
+      System.put_env("FAKE_GH_HEAD_SHA", head_sha)
+
+      fun.(log_path)
+    after
+      restore_env("FAKE_GH_HEAD_SHA", old_head_sha)
+      restore_env("COMMAND_LOG", old_command_log)
+      System.put_env("PATH", original_path)
+      File.rm_rf(root)
+    end
+  end
+
+  defp fake_resume_gh_script do
+    """
+    #!/bin/sh
+    printf 'gh %s\\n' "$*" >> "$COMMAND_LOG"
+
+    if [ "$1" = "label" ] && [ "$2" = "create" ]; then
+      exit 0
+    fi
+
+    if [ "$1" = "api" ]; then
+      exit 0
+    fi
+
+    if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+      printf 'https://github.com/Subconscious-ai/example/pull/200\\n'
+      exit 0
+    fi
+
+    if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+      printf '{"url":"https://github.com/Subconscious-ai/example/pull/200","isDraft":true,"headRefOid":"%s","title":"BEC-200: Restart resume committed delivery","body":"Refs BEC-200","labels":[{"name":"symphony"}],"statusCheckRollup":[{"__typename":"CheckRun","name":"symphony-gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/Subconscious-ai/example/actions/runs/200/job/201"}]}\\n' "$FAKE_GH_HEAD_SHA"
+      exit 0
+    fi
+
+    if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+      printf '[{"url":"https://github.com/Subconscious-ai/example/pull/200","isDraft":true,"headRefOid":"%s","title":"BEC-200: Restart resume committed delivery","body":"Refs BEC-200","labels":[{"name":"symphony"}],"statusCheckRollup":[{"__typename":"CheckRun","name":"symphony-gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/Subconscious-ai/example/actions/runs/200/job/201"}]}]\\n' "$FAKE_GH_HEAD_SHA"
+      exit 0
+    fi
+
+    exit 99
+    """
   end
 
   test "codex cached token updates stay running until uncached budget is exceeded" do

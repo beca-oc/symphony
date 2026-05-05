@@ -2,6 +2,23 @@
 
 These instructions define the two OpenClaw agents that should operate around Symphony. Linear is the control plane. Symphony is the code foreman. OpenClaw should write, inspect, and merge through deterministic gates instead of treating agent output as sufficient evidence.
 
+## Allowed Systems
+
+OpenClaw agents may create, review, and merge Symphony-managed work only for these systems:
+
+| System | Status | Rule |
+| --- | --- | --- |
+| `ai-chatbot` | practice repo | May receive Level 0-3 Symphony work under the risk policy. |
+| `spice-harvester` | practice repo | May receive Level 0-3 Symphony work under the risk policy. |
+| `causl.io` | practice repo | May receive Level 0-3 Symphony work under the risk policy. |
+| `market-ontology` | practice repo | May receive Level 0-4 contract/dependency work under the risk policy. |
+| `causalactions` | candidate repo | Bootstrap `scripts/agent/*`, `AGENTS.md`, and `symphony-gate` before product work. |
+| `causalflow` | candidate repo | Bootstrap `scripts/agent/*`, `AGENTS.md`, and `symphony-gate` before product work. |
+| `causalintelligence` | candidate repo | Bootstrap `scripts/agent/*`, `AGENTS.md`, and `symphony-gate` before product work. |
+| `colossus` | candidate repo | Bootstrap `scripts/agent/*`, `AGENTS.md`, and `symphony-gate` before product work. |
+
+Candidate repos are not approved for autonomous product-code work until they pass one Level 0 static canary and one Level 1 repo-native validation canary.
+
 ## Agent 1: OpenClaw Product Engineer
 
 ### Mission
@@ -189,4 +206,3 @@ Do not call the system ready for autonomous multi-day engineering until all four
 - One restart/resume exercise.
 - One merge conflict recovery exercise.
 - One multi-PR dependency chain.
-

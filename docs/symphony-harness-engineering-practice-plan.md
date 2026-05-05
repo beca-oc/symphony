@@ -117,7 +117,7 @@ Each repo must pass the following ladder before we use it for real multi-day wor
 - [ ] **Step 4: Implement evidence measurement block**
   - Include runtime, uncached tokens, total tokens, validation command, PR URL, check/deploy URL, and failure bucket.
 
-- [ ] **Step 5: Validate**
+- [x] **Step 5: Validate**
   - Run: `cd elixir && mix test`
   - Run: `cd elixir && mix build`
 
@@ -161,6 +161,10 @@ Each repo must pass the following ladder before we use it for real multi-day wor
 - [ ] **Step 2: Implement idempotent lookup**
   - Reuse PRs by branch and Linear attachment.
   - Reuse `## Codex Workpad` and `## Symphony Evidence Gate` comments by heading.
+
+- [x] **Step 2.5: Implement committed-workspace resume**
+  - If Symphony restarts after an agent commits local work but before post-agent publication finishes, reuse the local committed `codex/<issue-id>-...` workspace, publish/verify the existing commit, and avoid launching a duplicate worker.
+  - Test: `test/symphony_elixir/core_test.exs` covers committed workspace resume through workpad, evidence gate, and `Human Review`.
 
 - [ ] **Step 3: Validate**
   - Run: `cd elixir && mix test test/symphony_elixir/orchestrator_resume_test.exs`
