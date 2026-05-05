@@ -21,7 +21,11 @@ On May 5, 2026, all four repos passed Level 0 Symphony proof canaries from fresh
 | `market-ontology` | `BEC-1794` | `Subconscious-ai/market-ontology#34` | 52,354 | 115s | Human Review |
 | `causl.io` | `BEC-1793` | `Subconscious-ai/causl.io#242` | 57,523 | 350s | Human Review |
 
+`BEC-1800` then proved the corrected evidence URL gate on `spice-harvester`: Symphony recorded `check_url` as the real GitHub Actions `symphony-gate` job, moved the issue to `Human Review`, and completed with 75,418 uncached tokens, 138 seconds runtime, `checker.passed == true`, and `manual_rescue_count == 0`.
+
 This proves small static delivery. It does not prove multi-day autonomous engineering.
+
+OpenClaw should use `docs/openclaw-symphony-agents.md` for the Product Engineer and Reviewer/Merge Captain agent contracts. The Product Engineer creates bounded, dependency-aware Linear issues. The Reviewer/Merge Captain checks deterministic Symphony evidence first, then semantic risk, then applies the merge policy.
 
 ## Subconscious.ai Harness Best Practice
 
@@ -112,6 +116,32 @@ Each repo must pass the following ladder before we use it for real multi-day wor
 
 - [ ] **Step 4: Implement evidence measurement block**
   - Include runtime, uncached tokens, total tokens, validation command, PR URL, check/deploy URL, and failure bucket.
+
+- [ ] **Step 5: Validate**
+  - Run: `cd elixir && mix test`
+  - Run: `cd elixir && mix build`
+
+### Task S1.5: Add Trace-Backed Completed Run History
+
+**Files:**
+- Modify: `elixir/lib/symphony_elixir/run_trace.ex`
+- Modify: `elixir/lib/symphony_elixir_web/presenter.ex`
+- Modify: `elixir/lib/symphony_elixir_web/live/dashboard_live.ex`
+- Test: `elixir/test/symphony_elixir/run_trace_test.exs`
+- Test: `elixir/test/symphony_elixir/extensions_test.exs`
+
+- [x] **Step 1: Write failing trace reader test**
+  - Assert `RunTrace.recent/1` returns latest valid NDJSON records first and ignores malformed lines.
+
+- [x] **Step 2: Implement trace reader**
+  - Add a bounded trace reader that returns completed run records from `symphony-runs.ndjson`.
+
+- [x] **Step 3: Write failing API/dashboard tests**
+  - Assert `/api/v1/state` includes `completed_runs`.
+  - Assert the dashboard renders a `Completed runs` section.
+
+- [x] **Step 4: Implement API and dashboard projection**
+  - Add recent completed run history to the state payload and dashboard.
 
 - [ ] **Step 5: Validate**
   - Run: `cd elixir && mix test`
@@ -418,4 +448,3 @@ Pass criteria for the next round:
 5. Run restart/resume in `ai-chatbot` and `spice-harvester`.
 6. Run the cross-repo ontology dependency chain.
 7. Publish `docs/symphony-harness-engineering-best-practice.md` from observed results, not aspirational process.
-

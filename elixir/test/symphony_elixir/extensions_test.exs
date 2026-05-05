@@ -342,6 +342,38 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
+    trace_file =
+      Path.join(System.tmp_dir!(), "symphony-elixir-observability-trace-#{System.unique_integer([:positive])}.ndjson")
+
+    old_trace_file = Application.get_env(:symphony_elixir, :run_trace_file)
+
+    Application.put_env(:symphony_elixir, :run_trace_file, trace_file)
+
+    on_exit(fn ->
+      if is_nil(old_trace_file) do
+        Application.delete_env(:symphony_elixir, :run_trace_file)
+      else
+        Application.put_env(:symphony_elixir, :run_trace_file, old_trace_file)
+      end
+
+      File.rm_rf(trace_file)
+    end)
+
+    File.write!(
+      trace_file,
+      Jason.encode!(%{
+        issue_identifier: "BEC-TRACE",
+        outcome: "human_review",
+        failure_bucket: "none",
+        pr_url: "https://github.com/Subconscious-ai/spice-harvester/pull/211",
+        check_url: "https://github.com/Subconscious-ai/spice-harvester/actions/runs/1/job/2",
+        runtime_seconds: 138,
+        manual_rescue_count: 0,
+        tokens: %{"uncached_total_tokens" => 75_418, "total_tokens" => 499_994},
+        recorded_at: "2026-05-05T22:16:03Z"
+      }) <> "\n"
+    )
+
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)
 
@@ -408,7 +440,20 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total_tokens" => 12,
                "seconds_running" => 42.5
              },
-             "rate_limits" => %{"primary" => %{"remaining" => 11}}
+             "rate_limits" => %{"primary" => %{"remaining" => 11}},
+             "completed_runs" => [
+               %{
+                 "issue_identifier" => "BEC-TRACE",
+                 "outcome" => "human_review",
+                 "failure_bucket" => "none",
+                 "pr_url" => "https://github.com/Subconscious-ai/spice-harvester/pull/211",
+                 "check_url" => "https://github.com/Subconscious-ai/spice-harvester/actions/runs/1/job/2",
+                 "runtime_seconds" => 138,
+                 "manual_rescue_count" => 0,
+                 "tokens" => %{"uncached_total_tokens" => 75_418, "total_tokens" => 499_994},
+                 "recorded_at" => "2026-05-05T22:16:03Z"
+               }
+             ]
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
@@ -587,6 +632,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Offline"
     assert html =~ "Copy ID"
     assert html =~ "Codex update"
+    assert html =~ "Completed runs"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"

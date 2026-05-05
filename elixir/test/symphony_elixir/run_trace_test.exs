@@ -116,6 +116,31 @@ defmodule SymphonyElixir.RunTraceTest do
     end
   end
 
+  test "recent reads latest valid trace records first and ignores malformed lines" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-run-trace-recent-#{System.unique_integer([:positive])}")
+    trace_file = Path.join(test_root, "runs.ndjson")
+    old_trace_file = Application.get_env(:symphony_elixir, :run_trace_file)
+
+    try do
+      Application.put_env(:symphony_elixir, :run_trace_file, trace_file)
+      File.mkdir_p!(test_root)
+
+      File.write!(trace_file, Jason.encode!(%{issue_identifier: "BEC-1", recorded_at: "2026-05-05T01:00:00Z"}) <> "\n")
+      File.write!(trace_file, "not json\n", [:append])
+      File.write!(trace_file, Jason.encode!(%{issue_identifier: "BEC-2", recorded_at: "2026-05-05T02:00:00Z"}) <> "\n", [:append])
+
+      assert [
+               %{"issue_identifier" => "BEC-2"},
+               %{"issue_identifier" => "BEC-1"}
+             ] = RunTrace.recent(10)
+
+      assert [%{"issue_identifier" => "BEC-2"}] = RunTrace.recent(1)
+    after
+      restore_app_env(:run_trace_file, old_trace_file)
+      File.rm_rf(test_root)
+    end
+  end
+
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
 end

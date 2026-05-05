@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator, StatusDashboard}
+  alias SymphonyElixir.{Config, Orchestrator, RunTrace, StatusDashboard}
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
@@ -20,7 +20,8 @@ defmodule SymphonyElixirWeb.Presenter do
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           codex_totals: codex_totals_payload(snapshot.codex_totals),
-          rate_limits: snapshot.rate_limits
+          rate_limits: snapshot.rate_limits,
+          completed_runs: completed_runs_payload()
         }
 
       :timeout ->
@@ -123,6 +124,34 @@ defmodule SymphonyElixirWeb.Presenter do
       workspace_path: Map.get(entry, :workspace_path)
     }
   end
+
+  defp completed_runs_payload do
+    RunTrace.recent(20)
+    |> Enum.map(&completed_run_payload/1)
+  end
+
+  defp completed_run_payload(entry) when is_map(entry) do
+    %{
+      issue_identifier: Map.get(entry, "issue_identifier"),
+      outcome: Map.get(entry, "outcome"),
+      failure_bucket: Map.get(entry, "failure_bucket"),
+      pr_url: Map.get(entry, "pr_url"),
+      check_url: Map.get(entry, "check_url"),
+      runtime_seconds: Map.get(entry, "runtime_seconds"),
+      manual_rescue_count: Map.get(entry, "manual_rescue_count"),
+      tokens: completed_run_tokens_payload(Map.get(entry, "tokens")),
+      recorded_at: Map.get(entry, "recorded_at")
+    }
+  end
+
+  defp completed_run_tokens_payload(tokens) when is_map(tokens) do
+    %{
+      uncached_total_tokens: map_value(tokens, :uncached_total_tokens, 0),
+      total_tokens: map_value(tokens, :total_tokens, 0)
+    }
+  end
+
+  defp completed_run_tokens_payload(_tokens), do: completed_run_tokens_payload(%{})
 
   defp running_issue_payload(running) do
     %{

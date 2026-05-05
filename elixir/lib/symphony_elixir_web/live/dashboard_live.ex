@@ -244,6 +244,71 @@ defmodule SymphonyElixirWeb.DashboardLive do
             </div>
           <% end %>
         </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Completed runs</h2>
+              <p class="section-copy">Recent trace-backed outcomes from <code>symphony-runs.ndjson</code>.</p>
+            </div>
+          </div>
+
+          <%= if @payload.completed_runs == [] do %>
+            <p class="empty-state">No completed run traces recorded yet.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table" style="min-width: 900px;">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>Outcome</th>
+                    <th>Evidence</th>
+                    <th>Runtime</th>
+                    <th>Tokens</th>
+                    <th>Recorded</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- @payload.completed_runs}>
+                    <td>
+                      <span class="issue-id"><%= entry.issue_identifier || "n/a" %></span>
+                    </td>
+                    <td>
+                      <div class="detail-stack">
+                        <span class={state_badge_class(entry.outcome || "unknown")}>
+                          <%= entry.outcome || "unknown" %>
+                        </span>
+                        <span class="muted"><%= entry.failure_bucket || "none" %></span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="detail-stack">
+                        <%= if entry.pr_url do %>
+                          <a class="issue-link" href={entry.pr_url}>PR</a>
+                        <% else %>
+                          <span class="muted">PR n/a</span>
+                        <% end %>
+                        <%= if entry.check_url do %>
+                          <a class="issue-link" href={entry.check_url}>Check</a>
+                        <% else %>
+                          <span class="muted">Check n/a</span>
+                        <% end %>
+                      </div>
+                    </td>
+                    <td class="numeric"><%= format_runtime_seconds(entry.runtime_seconds || 0) %></td>
+                    <td>
+                      <div class="token-stack numeric">
+                        <span>Uncached: <%= format_int(entry.tokens.uncached_total_tokens) %></span>
+                        <span class="muted">Total <%= format_int(entry.tokens.total_tokens) %></span>
+                      </div>
+                    </td>
+                    <td class="mono numeric"><%= entry.recorded_at || "n/a" %></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+        </section>
       <% end %>
     </section>
     """
