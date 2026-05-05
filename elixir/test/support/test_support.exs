@@ -42,6 +42,7 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+          Application.delete_env(:symphony_elixir, :memory_tracker_comments)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
           File.rm_rf(workflow_root)
         end)
@@ -99,12 +100,18 @@ defmodule SymphonyElixir.TestSupport do
           tracker_assignee: nil,
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+          repo_name: nil,
+          repo_github_repo: nil,
+          repo_default_branch: nil,
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
           worker_ssh_hosts: [],
           worker_max_concurrent_agents_per_host: nil,
           max_concurrent_agents: 10,
           max_turns: 20,
+          max_total_tokens: nil,
+          max_uncached_tokens: nil,
+          continue_after_normal_exit: true,
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
           codex_command: "codex app-server",
@@ -119,6 +126,15 @@ defmodule SymphonyElixir.TestSupport do
           hook_after_run: nil,
           hook_before_remove: nil,
           hook_timeout_ms: 60_000,
+          validation_preflight: nil,
+          validation_fast: nil,
+          validation_full: nil,
+          validation_deploy_evidence: nil,
+          validation_evidence_required: false,
+          evidence_gate_github_required_checks: nil,
+          evidence_gate_github_optional_checks: nil,
+          evidence_gate_allow_skipped_checks: nil,
+          evidence_gate_timeout_seconds: nil,
           observability_enabled: true,
           observability_refresh_ms: 1_000,
           observability_render_interval_ms: 16,
@@ -136,14 +152,20 @@ defmodule SymphonyElixir.TestSupport do
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
+    repo_name = Keyword.get(config, :repo_name)
+    repo_github_repo = Keyword.get(config, :repo_github_repo)
+    repo_default_branch = Keyword.get(config, :repo_default_branch)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
     worker_ssh_hosts = Keyword.get(config, :worker_ssh_hosts)
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
     max_turns = Keyword.get(config, :max_turns)
+    max_total_tokens = Keyword.get(config, :max_total_tokens)
+    continue_after_normal_exit = Keyword.get(config, :continue_after_normal_exit)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
+    max_uncached_tokens = Keyword.get(config, :max_uncached_tokens)
     codex_command = Keyword.get(config, :codex_command)
     codex_approval_policy = Keyword.get(config, :codex_approval_policy)
     codex_thread_sandbox = Keyword.get(config, :codex_thread_sandbox)
@@ -156,6 +178,15 @@ defmodule SymphonyElixir.TestSupport do
     hook_after_run = Keyword.get(config, :hook_after_run)
     hook_before_remove = Keyword.get(config, :hook_before_remove)
     hook_timeout_ms = Keyword.get(config, :hook_timeout_ms)
+    validation_preflight = Keyword.get(config, :validation_preflight)
+    validation_fast = Keyword.get(config, :validation_fast)
+    validation_full = Keyword.get(config, :validation_full)
+    validation_deploy_evidence = Keyword.get(config, :validation_deploy_evidence)
+    validation_evidence_required = Keyword.get(config, :validation_evidence_required)
+    evidence_gate_github_required_checks = Keyword.get(config, :evidence_gate_github_required_checks)
+    evidence_gate_github_optional_checks = Keyword.get(config, :evidence_gate_github_optional_checks)
+    evidence_gate_allow_skipped_checks = Keyword.get(config, :evidence_gate_allow_skipped_checks)
+    evidence_gate_timeout_seconds = Keyword.get(config, :evidence_gate_timeout_seconds)
     observability_enabled = Keyword.get(config, :observability_enabled)
     observability_refresh_ms = Keyword.get(config, :observability_refresh_ms)
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
@@ -174,6 +205,7 @@ defmodule SymphonyElixir.TestSupport do
         "  assignee: #{yaml_value(tracker_assignee)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
+        repo_yaml(repo_name, repo_github_repo, repo_default_branch),
         "polling:",
         "  interval_ms: #{yaml_value(poll_interval_ms)}",
         "workspace:",
@@ -182,6 +214,9 @@ defmodule SymphonyElixir.TestSupport do
         "agent:",
         "  max_concurrent_agents: #{yaml_value(max_concurrent_agents)}",
         "  max_turns: #{yaml_value(max_turns)}",
+        "  max_total_tokens: #{yaml_value(max_total_tokens)}",
+        "  max_uncached_tokens: #{yaml_value(max_uncached_tokens)}",
+        "  continue_after_normal_exit: #{yaml_value(continue_after_normal_exit)}",
         "  max_retry_backoff_ms: #{yaml_value(max_retry_backoff_ms)}",
         "  max_concurrent_agents_by_state: #{yaml_value(max_concurrent_agents_by_state)}",
         "codex:",
@@ -193,6 +228,19 @@ defmodule SymphonyElixir.TestSupport do
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
+        validation_yaml(
+          validation_preflight,
+          validation_fast,
+          validation_full,
+          validation_deploy_evidence,
+          validation_evidence_required
+        ),
+        evidence_gate_yaml(
+          evidence_gate_github_required_checks,
+          evidence_gate_github_optional_checks,
+          evidence_gate_allow_skipped_checks,
+          evidence_gate_timeout_seconds
+        ),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
         "---",
@@ -255,6 +303,48 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
+  defp repo_yaml(nil, nil, nil), do: nil
+
+  defp repo_yaml(name, github_repo, default_branch) do
+    [
+      "repo:",
+      name && "  name: #{yaml_value(name)}",
+      github_repo && "  github_repo: #{yaml_value(github_repo)}",
+      default_branch && "  default_branch: #{yaml_value(default_branch)}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  defp validation_yaml(nil, nil, nil, nil, false), do: nil
+
+  defp validation_yaml(preflight, fast, full, deploy_evidence, evidence_required) do
+    [
+      "validation:",
+      command_entry("preflight", preflight),
+      command_entry("fast", fast),
+      command_entry("full", full),
+      deploy_evidence && "  deploy_evidence: #{yaml_value(deploy_evidence)}",
+      "  evidence_required: #{yaml_value(evidence_required)}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  defp evidence_gate_yaml(nil, nil, nil, nil), do: nil
+
+  defp evidence_gate_yaml(required_checks, optional_checks, allow_skipped_checks, timeout_seconds) do
+    [
+      "evidence_gate:",
+      required_checks && "  github_required_checks: #{yaml_value(required_checks)}",
+      optional_checks && "  github_optional_checks: #{yaml_value(optional_checks)}",
+      allow_skipped_checks && "  allow_skipped_checks: #{yaml_value(allow_skipped_checks)}",
+      timeout_seconds && "  timeout_seconds: #{yaml_value(timeout_seconds)}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
   defp observability_yaml(enabled, refresh_ms, render_interval_ms) do
     [
       "observability:",
@@ -280,6 +370,12 @@ defmodule SymphonyElixir.TestSupport do
   defp hook_entry(_name, nil), do: nil
 
   defp hook_entry(name, command) when is_binary(command) do
+    command_entry(name, command)
+  end
+
+  defp command_entry(_name, nil), do: nil
+
+  defp command_entry(name, command) when is_binary(command) do
     indented =
       command
       |> String.split("\n")

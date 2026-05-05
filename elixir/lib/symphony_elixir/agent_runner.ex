@@ -34,8 +34,18 @@ defmodule SymphonyElixir.AgentRunner do
         send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
 
         try do
-          with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
+          with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host),
+               :ok <- Workspace.run_validation_preflight(workspace, issue, worker_host) do
             run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+          else
+            {:error, {:workspace_hook_failed, "validation.preflight", _status, _output} = reason} ->
+              block_for_preflight_failure(issue, codex_update_recipient, reason)
+
+            {:error, {:workspace_hook_timeout, "validation.preflight", _timeout_ms} = reason} ->
+              block_for_preflight_failure(issue, codex_update_recipient, reason)
+
+            {:error, reason} ->
+              {:error, reason}
           end
         after
           Workspace.run_after_run_hook(workspace, issue, worker_host)
@@ -75,6 +85,63 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+
+  defp block_for_preflight_failure(issue, recipient, reason) do
+    body = preflight_blocker_comment(reason)
+
+    notify_harness_blocked(recipient, issue, :preflight, reason)
+
+    case Tracker.create_comment(issue.id, body) do
+      :ok -> Tracker.update_issue_state(issue.id, "Rework")
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp notify_harness_blocked(recipient, %Issue{id: issue_id}, gate, reason)
+       when is_pid(recipient) and is_binary(issue_id) do
+    send(recipient, {:harness_gate_blocked, issue_id, %{gate: gate, reason: reason}})
+    :ok
+  end
+
+  defp notify_harness_blocked(_recipient, _issue, _gate, _reason), do: :ok
+
+  defp preflight_blocker_comment(reason) do
+    """
+    ## Symphony Harness Blocker
+
+    Gate: validation.preflight
+    Result: failed
+
+    #{format_preflight_reason(reason)}
+
+    Symphony moved this issue to Rework before starting Codex because the deterministic preflight failed.
+    """
+  end
+
+  defp format_preflight_reason({:workspace_hook_failed, "validation.preflight", status, output}) do
+    """
+    Exit status: #{status}
+
+    Output:
+    #{truncate_output(output)}
+    """
+  end
+
+  defp format_preflight_reason({:workspace_hook_timeout, "validation.preflight", timeout_ms}) do
+    "Timed out after #{timeout_ms}ms."
+  end
+
+  defp format_preflight_reason(reason), do: inspect(reason)
+
+  defp truncate_output(output, max_bytes \\ 4_096) do
+    text = IO.iodata_to_binary(output || "")
+
+    if byte_size(text) <= max_bytes do
+      text
+    else
+      binary_part(text, 0, max_bytes) <> "... (truncated)"
+    end
+  end
 
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)

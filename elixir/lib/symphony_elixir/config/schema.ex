@@ -100,6 +100,25 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Repo do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:name, :string)
+      field(:github_repo, :string)
+      field(:default_branch, :string, default: "main")
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:name, :github_repo, :default_branch], empty_values: [])
+    end
+  end
+
   defmodule Worker do
     @moduledoc false
     use Ecto.Schema
@@ -130,6 +149,9 @@ defmodule SymphonyElixir.Config.Schema do
     embedded_schema do
       field(:max_concurrent_agents, :integer, default: 10)
       field(:max_turns, :integer, default: 20)
+      field(:max_total_tokens, :integer)
+      field(:max_uncached_tokens, :integer)
+      field(:continue_after_normal_exit, :boolean, default: true)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
       field(:max_concurrent_agents_by_state, :map, default: %{})
     end
@@ -139,11 +161,21 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:max_concurrent_agents, :max_turns, :max_retry_backoff_ms, :max_concurrent_agents_by_state],
+        [
+          :max_concurrent_agents,
+          :max_turns,
+          :max_total_tokens,
+          :max_uncached_tokens,
+          :continue_after_normal_exit,
+          :max_retry_backoff_ms,
+          :max_concurrent_agents_by_state
+        ],
         empty_values: []
       )
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
+      |> validate_number(:max_total_tokens, greater_than: 0)
+      |> validate_number(:max_uncached_tokens, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
@@ -221,6 +253,66 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Validation do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @deploy_evidence_values ["none", "vercel", "github_checks"]
+
+    @primary_key false
+    embedded_schema do
+      field(:preflight, :string)
+      field(:fast, :string)
+      field(:full, :string)
+      field(:deploy_evidence, :string, default: "none")
+      field(:evidence_required, :boolean, default: false)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:preflight, :fast, :full, :deploy_evidence, :evidence_required], empty_values: [])
+      |> update_change(:preflight, &String.trim_trailing/1)
+      |> update_change(:fast, &String.trim_trailing/1)
+      |> update_change(:full, &String.trim_trailing/1)
+      |> validate_inclusion(:deploy_evidence, @deploy_evidence_values)
+    end
+  end
+
+  defmodule EvidenceGate do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:github_required_checks, {:array, :string}, default: [])
+      field(:github_optional_checks, {:array, :string}, default: [])
+      field(:allow_skipped_checks, {:array, :string}, default: [])
+      field(:timeout_seconds, :integer)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:github_required_checks, :github_optional_checks, :allow_skipped_checks, :timeout_seconds], empty_values: [])
+      |> update_change(:github_required_checks, &normalize_string_list/1)
+      |> update_change(:github_optional_checks, &normalize_string_list/1)
+      |> update_change(:allow_skipped_checks, &normalize_string_list/1)
+      |> validate_number(:timeout_seconds, greater_than: 0)
+    end
+
+    defp normalize_string_list(values) when is_list(values) do
+      values
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+    end
+
+    defp normalize_string_list(_values), do: []
+  end
+
   defmodule Observability do
     @moduledoc false
     use Ecto.Schema
@@ -265,10 +357,13 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:repo, Repo, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:validation, Validation, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:evidence_gate, EvidenceGate, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
   end
@@ -357,10 +452,13 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:polling, with: &Polling.changeset/2)
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
+    |> cast_embed(:repo, with: &Repo.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
+    |> cast_embed(:validation, with: &Validation.changeset/2)
+    |> cast_embed(:evidence_gate, with: &EvidenceGate.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
   end

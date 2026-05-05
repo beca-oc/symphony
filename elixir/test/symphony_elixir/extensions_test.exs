@@ -184,6 +184,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   test "tracker delegates to memory and linear adapters" do
     issue = %Issue{id: "issue-1", identifier: "MT-1", state: "In Progress"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue, %{id: "ignored"}])
+    Application.put_env(:symphony_elixir, :memory_tracker_comments, %{"issue-1" => ["first", 42, "second"]})
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
 
@@ -192,6 +193,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues()
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["issue-1"])
+    assert {:ok, ["first", "second"]} = SymphonyElixir.Tracker.fetch_comments("issue-1")
     assert :ok = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
     assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
@@ -216,6 +218,26 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(["issue-1"])
     assert_receive {:fetch_issue_states_by_ids_called, ["issue-1"]}
+
+    Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok,
+       %{
+         "data" => %{
+           "issue" => %{"comments" => %{"nodes" => [%{"body" => "one"}, %{"body" => "two"}]}}
+         }
+       }}
+    )
+
+    assert {:ok, ["one", "two"]} = Adapter.fetch_comments("issue-1")
+    assert_receive {:graphql_called, comments_query, %{first: 100, issueId: "issue-1"}}
+    assert comments_query =~ "comments"
+
+    Process.put({FakeLinearClient, :graphql_result}, {:error, :boom})
+    assert {:error, :boom} = Adapter.fetch_comments("issue-1")
+
+    Process.put({FakeLinearClient, :graphql_result}, {:ok, %{"data" => %{}}})
+    assert {:error, :comments_fetch_failed} = Adapter.fetch_comments("issue-1")
 
     Process.put(
       {FakeLinearClient, :graphql_result},
@@ -356,7 +378,14 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "last_message" => "rendered",
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
-                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+                 "tokens" => %{
+                   "input_tokens" => 4,
+                   "cached_input_tokens" => 0,
+                   "uncached_input_tokens" => 4,
+                   "output_tokens" => 8,
+                   "uncached_total_tokens" => 12,
+                   "total_tokens" => 12
+                 }
                }
              ],
              "retrying" => [
@@ -372,7 +401,10 @@ defmodule SymphonyElixir.ExtensionsTest do
              ],
              "codex_totals" => %{
                "input_tokens" => 4,
+               "cached_input_tokens" => 0,
+               "uncached_input_tokens" => 4,
                "output_tokens" => 8,
+               "uncached_total_tokens" => 12,
                "total_tokens" => 12,
                "seconds_running" => 42.5
              },
@@ -401,7 +433,14 @@ defmodule SymphonyElixir.ExtensionsTest do
                "last_event" => "notification",
                "last_message" => "rendered",
                "last_event_at" => nil,
-               "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+               "tokens" => %{
+                 "input_tokens" => 4,
+                 "cached_input_tokens" => 0,
+                 "uncached_input_tokens" => 4,
+                 "output_tokens" => 8,
+                 "uncached_total_tokens" => 12,
+                 "total_tokens" => 12
+               }
              },
              "retry" => nil,
              "logs" => %{"codex_session_logs" => []},

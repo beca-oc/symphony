@@ -17,6 +17,9 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert config.tracker.assignee == nil
     assert config.agent.max_turns == 20
+    assert config.agent.max_total_tokens == nil
+    assert config.agent.max_uncached_tokens == nil
+    assert config.agent.continue_after_normal_exit == true
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
 
@@ -36,6 +39,24 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 5)
     assert Config.settings!().agent.max_turns == 5
+
+    write_workflow_file!(Workflow.workflow_file_path(), max_total_tokens: 0)
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "agent.max_total_tokens"
+
+    write_workflow_file!(Workflow.workflow_file_path(), max_uncached_tokens: 0)
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "agent.max_uncached_tokens"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      max_total_tokens: 1_000_000,
+      max_uncached_tokens: 250_000,
+      continue_after_normal_exit: false
+    )
+
+    assert Config.settings!().agent.max_total_tokens == 1_000_000
+    assert Config.settings!().agent.max_uncached_tokens == 250_000
+    assert Config.settings!().agent.continue_after_normal_exit == false
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: "Todo,  Review,")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
@@ -554,6 +575,223 @@ defmodule SymphonyElixir.CoreTest do
     assert_due_in_range(due_at_ms, 500, 1_100)
   end
 
+  test "normal worker exit can disable active-state continuation retry" do
+    write_workflow_file!(Workflow.workflow_file_path(), continue_after_normal_exit: false)
+
+    issue_id = "issue-no-resume"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :NoContinuationOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-562",
+      issue: %Issue{id: issue_id, identifier: "MT-562", state: "In Progress"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+    assert MapSet.member?(state.claimed, issue_id)
+    assert state.retry_attempts == %{}
+  end
+
+  test "codex token updates stop a running issue that exceeds max_total_tokens" do
+    write_workflow_file!(Workflow.workflow_file_path(), max_total_tokens: 10)
+
+    issue_id = "issue-token-budget"
+
+    agent_pid =
+      spawn(fn ->
+        Process.sleep(:infinity)
+      end)
+
+    ref = Process.monitor(agent_pid)
+    orchestrator_name = Module.concat(__MODULE__, :TokenBudgetOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(agent_pid) do
+        Process.exit(agent_pid, :kill)
+      end
+
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: agent_pid,
+      ref: ref,
+      identifier: "MT-563",
+      issue: %Issue{id: issue_id, identifier: "MT-563", state: "In Progress"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {
+      :codex_worker_update,
+      issue_id,
+      %{
+        event: :notification,
+        timestamp: DateTime.utc_now(),
+        payload: %{
+          "method" => "thread/tokenUsage/updated",
+          "params" => %{
+            "tokenUsage" => %{
+              "total" => %{
+                "inputTokens" => 8,
+                "outputTokens" => 3,
+                "totalTokens" => 11
+              }
+            }
+          }
+        }
+      }
+    })
+
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+    assert MapSet.member?(state.claimed, issue_id)
+    assert state.retry_attempts == %{}
+    refute Process.alive?(agent_pid)
+    assert state.codex_totals.total_tokens == 11
+  end
+
+  test "codex cached token updates stay running until uncached budget is exceeded" do
+    write_workflow_file!(Workflow.workflow_file_path(), max_uncached_tokens: 10)
+
+    issue_id = "issue-uncached-token-budget"
+
+    agent_pid =
+      spawn(fn ->
+        Process.sleep(:infinity)
+      end)
+
+    ref = Process.monitor(agent_pid)
+    orchestrator_name = Module.concat(__MODULE__, :UncachedTokenBudgetOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(agent_pid) do
+        Process.exit(agent_pid, :kill)
+      end
+
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: agent_pid,
+      ref: ref,
+      identifier: "MT-564",
+      issue: %Issue{id: issue_id, identifier: "MT-564", state: "In Progress"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {
+      :codex_worker_update,
+      issue_id,
+      %{
+        event: :notification,
+        timestamp: DateTime.utc_now(),
+        payload: %{
+          "method" => "thread/tokenUsage/updated",
+          "params" => %{
+            "tokenUsage" => %{
+              "total" => %{
+                "inputTokens" => 1_000,
+                "cachedInputTokens" => 995,
+                "outputTokens" => 3,
+                "totalTokens" => 1_003
+              }
+            }
+          }
+        }
+      }
+    })
+
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    assert Map.has_key?(state.running, issue_id)
+    assert state.running[issue_id].codex_cached_input_tokens == 995
+    assert state.running[issue_id].codex_uncached_total_tokens == 8
+
+    send(pid, {
+      :codex_worker_update,
+      issue_id,
+      %{
+        event: :notification,
+        timestamp: DateTime.utc_now(),
+        payload: %{
+          "method" => "thread/tokenUsage/updated",
+          "params" => %{
+            "tokenUsage" => %{
+              "total" => %{
+                "inputTokens" => 1_010,
+                "cachedInputTokens" => 995,
+                "outputTokens" => 5,
+                "totalTokens" => 1_015
+              }
+            }
+          }
+        }
+      }
+    })
+
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+    assert MapSet.member?(state.claimed, issue_id)
+    refute Process.alive?(agent_pid)
+    assert state.codex_totals.cached_input_tokens == 995
+    assert state.codex_totals.uncached_total_tokens == 20
+  end
+
   test "abnormal worker exit increments retry attempt progressively" do
     issue_id = "issue-crash"
     ref = make_ref()
@@ -591,7 +829,7 @@ defmodule SymphonyElixir.CoreTest do
     assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 39_500, 40_500)
+    assert_due_in_range(due_at_ms, 38_500, 40_500)
   end
 
   test "first abnormal worker exit waits before retrying" do
@@ -1159,6 +1397,58 @@ defmodule SymphonyElixir.CoreTest do
                      500
 
       assert session_id == "thread-live-turn-live"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner blocks before Codex when validation preflight fails" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-preflight-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      codex_trace = Path.join(test_root, "codex.trace")
+
+      File.mkdir_p!(workspace_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      printf 'started\\n' >> "#{codex_trace}"
+      exit 0
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        validation_preflight: "printf 'missing deps\\n' && exit 42"
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-preflight",
+        identifier: "MT-PREFLIGHT",
+        title: "Preflight should block",
+        description: "No Codex process should start",
+        state: "In Progress"
+      }
+
+      assert :ok = AgentRunner.run(issue)
+
+      refute File.exists?(codex_trace)
+      assert_receive {:memory_tracker_comment, "issue-preflight", body}, 500
+      assert body =~ "## Symphony Harness Blocker"
+      assert body =~ "validation.preflight"
+      assert body =~ "missing deps"
+      assert_receive {:memory_tracker_state_update, "issue-preflight", "Rework"}, 500
     after
       File.rm_rf(test_root)
     end

@@ -19,7 +19,7 @@ defmodule SymphonyElixirWeb.Presenter do
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
-          codex_totals: snapshot.codex_totals,
+          codex_totals: codex_totals_payload(snapshot.codex_totals),
           rate_limits: snapshot.rate_limits
         }
 
@@ -108,11 +108,7 @@ defmodule SymphonyElixirWeb.Presenter do
       last_message: summarize_message(entry.last_codex_message),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(entry.last_codex_timestamp),
-      tokens: %{
-        input_tokens: entry.codex_input_tokens,
-        output_tokens: entry.codex_output_tokens,
-        total_tokens: entry.codex_total_tokens
-      }
+      tokens: tokens_payload(entry)
     }
   end
 
@@ -139,12 +135,47 @@ defmodule SymphonyElixirWeb.Presenter do
       last_event: running.last_codex_event,
       last_message: summarize_message(running.last_codex_message),
       last_event_at: iso8601(running.last_codex_timestamp),
-      tokens: %{
-        input_tokens: running.codex_input_tokens,
-        output_tokens: running.codex_output_tokens,
-        total_tokens: running.codex_total_tokens
-      }
+      tokens: tokens_payload(running)
     }
+  end
+
+  defp codex_totals_payload(totals) when is_map(totals) do
+    input_tokens = map_value(totals, :input_tokens, 0)
+    cached_input_tokens = map_value(totals, :cached_input_tokens, 0)
+    output_tokens = map_value(totals, :output_tokens, 0)
+    total_tokens = map_value(totals, :total_tokens, input_tokens + output_tokens)
+
+    %{
+      input_tokens: input_tokens,
+      cached_input_tokens: cached_input_tokens,
+      uncached_input_tokens: map_value(totals, :uncached_input_tokens, max(input_tokens - cached_input_tokens, 0)),
+      output_tokens: output_tokens,
+      uncached_total_tokens: map_value(totals, :uncached_total_tokens, max(total_tokens - cached_input_tokens, 0)),
+      total_tokens: total_tokens,
+      seconds_running: map_value(totals, :seconds_running, 0)
+    }
+  end
+
+  defp codex_totals_payload(_totals), do: codex_totals_payload(%{})
+
+  defp tokens_payload(entry) when is_map(entry) do
+    input_tokens = map_value(entry, :codex_input_tokens, 0)
+    cached_input_tokens = map_value(entry, :codex_cached_input_tokens, 0)
+    output_tokens = map_value(entry, :codex_output_tokens, 0)
+    total_tokens = map_value(entry, :codex_total_tokens, input_tokens + output_tokens)
+
+    %{
+      input_tokens: input_tokens,
+      cached_input_tokens: cached_input_tokens,
+      uncached_input_tokens: map_value(entry, :codex_uncached_input_tokens, max(input_tokens - cached_input_tokens, 0)),
+      output_tokens: output_tokens,
+      uncached_total_tokens: map_value(entry, :codex_uncached_total_tokens, max(total_tokens - cached_input_tokens, 0)),
+      total_tokens: total_tokens
+    }
+  end
+
+  defp map_value(map, key, default) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key)) || default
   end
 
   defp retry_issue_payload(retry) do

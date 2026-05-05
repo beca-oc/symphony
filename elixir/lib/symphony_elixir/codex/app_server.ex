@@ -393,6 +393,18 @@ defmodule SymphonyElixir.Codex.AppServer do
 
         {:error, {:turn_cancelled, Map.get(payload, "params")}}
 
+      {:ok, %{"method" => "error", "params" => params} = payload} ->
+        emit_turn_event(
+          on_message,
+          :turn_failed,
+          payload,
+          payload_string,
+          port,
+          params
+        )
+
+        {:error, {:codex_error, params}}
+
       {:ok, %{"method" => method} = payload}
       when is_binary(method) ->
         handle_turn_method(
@@ -669,6 +681,43 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp maybe_handle_approval_request(
+         port,
+         "mcpServer/elicitation/request",
+         %{"id" => id, "params" => params} = payload,
+         payload_string,
+         on_message,
+         metadata,
+         _tool_executor,
+         true
+       ) do
+    result = mcp_elicitation_auto_result(params)
+
+    send_message(port, %{"id" => id, "result" => result})
+
+    emit_message(
+      on_message,
+      :approval_auto_approved,
+      %{payload: payload, raw: payload_string, decision: Map.get(result, "action")},
+      metadata
+    )
+
+    :approved
+  end
+
+  defp maybe_handle_approval_request(
+         _port,
+         "mcpServer/elicitation/request",
+         _payload,
+         _payload_string,
+         _on_message,
+         _metadata,
+         _tool_executor,
+         false
+       ) do
+    :approval_required
+  end
+
+  defp maybe_handle_approval_request(
          _port,
          _method,
          _payload,
@@ -909,6 +958,216 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp tool_request_user_input_option_label(%{"label" => label}) when is_binary(label), do: label
   defp tool_request_user_input_option_label(_option), do: nil
+
+  defp mcp_elicitation_auto_result(params) do
+    case mcp_elicitation_auto_content(params) do
+      content when is_map(content) and map_size(content) > 0 ->
+        %{"action" => "accept", "content" => content}
+
+      _ ->
+        %{"action" => "decline"}
+    end
+  end
+
+  defp mcp_elicitation_auto_content(params) when is_map(params) do
+    request = Map.get(params, "request") || Map.get(params, :request) || params
+
+    request
+    |> mcp_elicitation_requested_schema()
+    |> mcp_elicitation_schema_content()
+  end
+
+  defp mcp_elicitation_auto_content(_params), do: %{}
+
+  defp mcp_elicitation_requested_schema(request) when is_map(request) do
+    Map.get(request, "requestedSchema") ||
+      Map.get(request, :requestedSchema) ||
+      Map.get(request, "requested_schema") ||
+      Map.get(request, :requested_schema)
+  end
+
+  defp mcp_elicitation_requested_schema(_request), do: nil
+
+  defp mcp_elicitation_schema_content(%{"properties" => properties} = schema)
+       when is_map(properties) do
+    required =
+      schema
+      |> Map.get("required", [])
+      |> Enum.filter(&is_binary/1)
+
+    preferred =
+      properties
+      |> Map.keys()
+      |> Enum.filter(&mcp_elicitation_preferred_field?/1)
+
+    (required ++ preferred)
+    |> Enum.uniq()
+    |> Enum.reduce(%{}, fn field, acc ->
+      put_mcp_elicitation_schema_value(acc, field, Map.get(properties, field))
+    end)
+  end
+
+  defp mcp_elicitation_schema_content(%{properties: properties} = schema)
+       when is_map(properties) do
+    schema
+    |> Map.put("properties", properties)
+    |> Map.put("required", Map.get(schema, :required, []))
+    |> mcp_elicitation_schema_content()
+  end
+
+  defp mcp_elicitation_schema_content(_schema), do: %{}
+
+  defp put_mcp_elicitation_schema_value(acc, field, property_schema)
+       when is_map(property_schema) do
+    case mcp_elicitation_schema_value(field, property_schema) do
+      {:ok, value} -> Map.put(acc, field, value)
+      :error -> acc
+    end
+  end
+
+  defp put_mcp_elicitation_schema_value(acc, _field, _property_schema), do: acc
+
+  defp mcp_elicitation_preferred_field?(field) when is_binary(field) do
+    normalized =
+      field
+      |> String.trim()
+      |> String.downcase()
+
+    normalized in ["approval_mode", "approval", "approve", "allow", "persist"] or
+      String.contains?(normalized, "approval") or
+      String.contains?(normalized, "approve")
+  end
+
+  defp mcp_elicitation_preferred_field?(_field), do: false
+
+  defp mcp_elicitation_schema_value(field, schema) when is_map(schema) do
+    cond do
+      Map.has_key?(schema, "default") ->
+        {:ok, Map.get(schema, "default")}
+
+      Map.has_key?(schema, :default) ->
+        {:ok, Map.get(schema, :default)}
+
+      mcp_elicitation_boolean_schema?(schema) ->
+        {:ok, true}
+
+      mcp_elicitation_array_schema?(schema) ->
+        {:ok, []}
+
+      mcp_elicitation_number_schema?(schema) ->
+        {:ok, mcp_elicitation_number_default(schema)}
+
+      true ->
+        mcp_elicitation_string_value(field, schema)
+    end
+  end
+
+  defp mcp_elicitation_boolean_schema?(schema) do
+    Map.get(schema, "type") == "boolean" or Map.get(schema, :type) == "boolean"
+  end
+
+  defp mcp_elicitation_array_schema?(schema) do
+    Map.get(schema, "type") == "array" or Map.get(schema, :type) == "array"
+  end
+
+  defp mcp_elicitation_number_schema?(schema) do
+    type = Map.get(schema, "type") || Map.get(schema, :type)
+    type in ["number", "integer"]
+  end
+
+  defp mcp_elicitation_number_default(schema) do
+    Map.get(schema, "minimum") || Map.get(schema, :minimum) || 0
+  end
+
+  defp mcp_elicitation_string_value(field, schema) do
+    options = mcp_elicitation_string_options(schema)
+
+    cond do
+      preferred = mcp_elicitation_preferred_option(field, options) ->
+        {:ok, preferred}
+
+      fallback = mcp_elicitation_first_safe_option(options) ->
+        {:ok, fallback}
+
+      Map.get(schema, "type") == "string" or Map.get(schema, :type) == "string" ->
+        {:ok, @non_interactive_tool_input_answer}
+
+      true ->
+        :error
+    end
+  end
+
+  defp mcp_elicitation_string_options(schema) when is_map(schema) do
+    enum_options =
+      schema
+      |> Map.get("enum", Map.get(schema, :enum, []))
+      |> Enum.map(&{&1, nil})
+
+    one_of_options =
+      schema
+      |> Map.get("oneOf", Map.get(schema, :oneOf, []))
+      |> Enum.flat_map(&mcp_elicitation_const_options/1)
+
+    any_of_options =
+      schema
+      |> Map.get("anyOf", Map.get(schema, :anyOf, []))
+      |> Enum.flat_map(&mcp_elicitation_const_options/1)
+
+    enum_options ++ one_of_options ++ any_of_options
+  end
+
+  defp mcp_elicitation_const_options(%{"const" => value} = option) do
+    [{value, Map.get(option, "title") || Map.get(option, "description")}]
+  end
+
+  defp mcp_elicitation_const_options(%{const: value} = option) do
+    [{value, Map.get(option, :title) || Map.get(option, :description)}]
+  end
+
+  defp mcp_elicitation_const_options(_option), do: []
+
+  defp mcp_elicitation_preferred_option(field, options) do
+    preferred_values =
+      if mcp_elicitation_preferred_field?(field) do
+        ["session", "approve", "allow", "yes", "true", "always"]
+      else
+        ["session", "approve", "allow", "yes", "true"]
+      end
+
+    Enum.find_value(preferred_values, fn preferred ->
+      Enum.find_value(options, &mcp_elicitation_preferred_option_value(&1, preferred))
+    end)
+  end
+
+  defp mcp_elicitation_preferred_option_value({value, label}, preferred) do
+    searchable =
+      [value, label]
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&String.downcase/1)
+
+    cond do
+      Enum.any?(searchable, &mcp_elicitation_reject_option?/1) -> nil
+      Enum.any?(searchable, &String.contains?(&1, preferred)) -> value
+      true -> nil
+    end
+  end
+
+  defp mcp_elicitation_first_safe_option(options) do
+    Enum.find_value(options, fn {value, label} ->
+      searchable =
+        [value, label]
+        |> Enum.filter(&is_binary/1)
+        |> Enum.map(&String.downcase/1)
+
+      if is_binary(value) and not Enum.any?(searchable, &mcp_elicitation_reject_option?/1) do
+        value
+      end
+    end)
+  end
+
+  defp mcp_elicitation_reject_option?(value) when is_binary(value) do
+    Enum.any?(["cancel", "deny", "decline", "reject"], &String.contains?(value, &1))
+  end
 
   defp approval_option_label?(label) when is_binary(label) do
     normalized_label =

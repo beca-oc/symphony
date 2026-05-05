@@ -561,6 +561,105 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "app server auto-approves MCP elicitation approval prompts when approval policy is never" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-mcp-elicitation-auto-approve-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-720")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex-mcp-elicitation-auto-approve.trace")
+      previous_trace = System.get_env("SYMP_TEST_CODEx_TRACE")
+
+      on_exit(fn ->
+        if is_binary(previous_trace) do
+          System.put_env("SYMP_TEST_CODEx_TRACE", previous_trace)
+        else
+          System.delete_env("SYMP_TEST_CODEx_TRACE")
+        end
+      end)
+
+      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex-mcp-elicitation-auto-approve.trace}"
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\\n' "$line" >> "$trace_file"
+
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-720"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-720"}}}'
+            printf '%s\\n' '{"id":120,"method":"mcpServer/elicitation/request","params":{"serverName":"linear","request":{"mode":"form","message":"Approve app tool call?","requestedSchema":{"type":"object","properties":{"approval_mode":{"type":"string","oneOf":[{"const":"approve","title":"Allow"},{"const":"session","title":"Allow for this session"},{"const":"always","title":"Allow and do not ask again"},{"const":"cancel","title":"Cancel"}]}},"required":["approval_mode"]}}}}'
+            ;;
+          5)
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          *)
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        codex_approval_policy: "never"
+      )
+
+      issue = %Issue{
+        id: "issue-mcp-elicitation-auto-approve",
+        identifier: "MT-720",
+        title: "Auto approve MCP elicitation request",
+        description: "Ensure MCP elicitation approval prompts continue automatically",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-720",
+        labels: ["backend"]
+      }
+
+      assert {:ok, _result} = AppServer.run(workspace, "Handle MCP elicitation", issue)
+
+      trace = File.read!(trace_file)
+      lines = String.split(trace, "\n", trim: true)
+
+      assert Enum.any?(lines, fn line ->
+               if String.starts_with?(line, "JSON:") do
+                 payload =
+                   line
+                   |> String.trim_leading("JSON:")
+                   |> Jason.decode!()
+
+                 payload["id"] == 120 and
+                   get_in(payload, ["result", "action"]) == "accept" and
+                   get_in(payload, ["result", "content", "approval_mode"]) == "session"
+               else
+                 false
+               end
+             end)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "app server sends a generic non-interactive answer for freeform tool input prompts" do
     test_root =
       Path.join(
@@ -1200,6 +1299,71 @@ defmodule SymphonyElixir.AppServerTest do
       assert_received {:app_server_message, %{event: :turn_completed}}
       refute_received {:app_server_message, %{event: :malformed}}
       assert log =~ "Codex turn stream output: warning: this is stderr noise"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "app server treats codex error notifications as failed turns" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-error-notification-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-93")
+      codex_binary = Path.join(test_root, "fake-codex")
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-93"}}}'
+            ;;
+          3)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-93"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"method":"error","params":{"error":{"message":"model requires newer Codex"}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          *)
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-error-notification",
+        identifier: "MT-93",
+        title: "Handle app-server errors",
+        description: "Ensure Codex app-server errors fail the worker turn",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-93",
+        labels: ["backend"]
+      }
+
+      assert {:error, {:codex_error, %{"error" => %{"message" => "model requires newer Codex"}}}} =
+               AppServer.run(workspace, "Surface app-server errors", issue)
     after
       File.rm_rf(test_root)
     end

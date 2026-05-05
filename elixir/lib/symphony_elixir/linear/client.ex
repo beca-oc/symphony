@@ -176,7 +176,7 @@ defmodule SymphonyElixir.Linear.Client do
             linear_error_context(payload, response)
         )
 
-        {:error, {:linear_api_status, response.status}}
+        {:error, linear_error_reason(response)}
 
       {:error, reason} ->
         Logger.error("Linear GraphQL request failed: #{inspect(reason)}")
@@ -401,6 +401,68 @@ defmodule SymphonyElixir.Linear.Client do
       connect_options: [timeout: 30_000]
     )
   end
+
+  defp linear_error_reason(%{status: status, body: body}) do
+    case linear_rate_limit_duration(body) do
+      duration_ms when is_integer(duration_ms) and duration_ms > 0 ->
+        {:linear_api_rate_limited, duration_ms}
+
+      _ ->
+        {:linear_api_status, status}
+    end
+  end
+
+  defp linear_rate_limit_duration(%{"errors" => errors}) when is_list(errors) do
+    Enum.find_value(errors, &linear_rate_limit_duration/1)
+  end
+
+  defp linear_rate_limit_duration(%{errors: errors}) when is_list(errors) do
+    Enum.find_value(errors, &linear_rate_limit_duration/1)
+  end
+
+  defp linear_rate_limit_duration(%{} = error) do
+    code =
+      map_get_in(error, ["extensions", "code"]) ||
+        map_get_in(error, [:extensions, :code])
+
+    status_code = Map.get(error, "statusCode") || Map.get(error, :statusCode)
+
+    if code == "RATELIMITED" or status_code == 429 do
+      error
+      |> rate_limit_duration_from_error()
+      |> positive_integer()
+    end
+  end
+
+  defp linear_rate_limit_duration(_body), do: nil
+
+  defp rate_limit_duration_from_error(error) do
+    map_get_in(error, ["extensions", "meta", "rateLimitResult", "duration"]) ||
+      map_get_in(error, [:extensions, :meta, :rateLimitResult, :duration]) ||
+      map_get_in(error, ["extensions", "meta", "rate_limit_result", "duration"]) ||
+      map_get_in(error, [:extensions, :meta, :rate_limit_result, :duration])
+  end
+
+  defp map_get_in(map, path) when is_map(map) and is_list(path) do
+    Enum.reduce_while(path, map, fn key, acc ->
+      if is_map(acc) and Map.has_key?(acc, key) do
+        {:cont, Map.get(acc, key)}
+      else
+        {:halt, nil}
+      end
+    end)
+  end
+
+  defp positive_integer(value) when is_integer(value) and value > 0, do: value
+
+  defp positive_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer > 0 -> integer
+      _ -> nil
+    end
+  end
+
+  defp positive_integer(_value), do: nil
 
   defp decode_linear_response(%{"data" => %{"issues" => %{"nodes" => nodes}}}, assignee_filter) do
     issues =
