@@ -34,6 +34,7 @@ validation:
   deploy_evidence: github_checks
   evidence_required: true
 evidence_gate:
+  github_required_checks: ["symphony-gate"]
   timeout_seconds: 1800
 agent:
   max_concurrent_agents: 1
@@ -76,4 +77,4 @@ Worker contract:
 8. Commit the local change with a clear message.
 9. Leave the workspace on the committed branch and stop.
 
-Symphony will run validation, push the branch, create the draft PR, label it, record Linear evidence, poll checks until terminal green or timeout, and move the issue to `Human Review` or `Rework`.
+Symphony will run validation, push the branch, create the draft PR, label it, record Linear evidence, require the repo-owned `symphony-gate` check, and move the issue to `Human Review` or `Rework`.

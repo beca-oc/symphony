@@ -335,6 +335,9 @@ defmodule SymphonyElixir.DeliveryPublisher do
     name = check_name(check)
 
     cond do
+      configured_required_checks?(evidence_gate) and not check_configured?(name, evidence_gate.github_required_checks) ->
+        nil
+
       check_configured?(name, evidence_gate.github_optional_checks) ->
         nil
 
@@ -352,6 +355,9 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp check_failure(_check, _evidence_gate), do: nil
+
+  defp configured_required_checks?(%{github_required_checks: checks}) when is_list(checks), do: checks != []
+  defp configured_required_checks?(_evidence_gate), do: false
 
   defp missing_required_check_failures(checks, evidence_gate) do
     present_names = Enum.map(checks, &check_name/1)

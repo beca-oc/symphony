@@ -149,6 +149,10 @@ Notes:
   branch, commit, draft PR, `symphony` label, validation evidence, and required deployment/check
   evidence before moving the issue to `Human Review`.
 - Supported `validation.deploy_evidence` values are `none`, `vercel`, and `github_checks`.
+- Use `evidence_gate.github_required_checks` to name the repo-owned checks that must pass before
+  Symphony can move an issue to `Human Review`. For the current engineering harness workflows, set
+  this to `["symphony-gate"]`; Symphony ignores unrelated optional or experimental checks when this
+  list is present.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.

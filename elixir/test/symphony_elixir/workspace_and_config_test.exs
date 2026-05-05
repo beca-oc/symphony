@@ -1046,6 +1046,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert message =~ "validation.deploy_evidence"
   end
 
+  test "active repo workflows require the repo-owned Symphony gate check" do
+    workflow_root = Path.expand("../../workflows", __DIR__)
+
+    for workflow <- ["ai-chatbot.md", "spice-harvester.md", "market-ontology.md", "causl-io.md"] do
+      workflow_path = Path.join(workflow_root, workflow)
+      workflow_body = File.read!(workflow_path)
+
+      assert workflow_body =~ "evidence_gate:"
+      assert workflow_body =~ ~s(github_required_checks: ["symphony-gate"])
+    end
+  end
+
   test "schema helpers cover custom type and state limit validation" do
     assert StringOrMap.type() == :map
     assert StringOrMap.embed_as(:json) == :self

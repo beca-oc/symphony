@@ -293,6 +293,9 @@ defmodule SymphonyElixir.DeliveryEvidence do
     name = check_name(check)
 
     cond do
+      configured_required_checks?(gate) and not check_configured?(name, gate.github_required_checks) ->
+        failures
+
       check_configured?(name, gate.github_optional_checks) ->
         failures
 
@@ -310,6 +313,9 @@ defmodule SymphonyElixir.DeliveryEvidence do
   end
 
   defp require_pr_check(_check, failures, _gate), do: failures
+
+  defp configured_required_checks?(%{github_required_checks: checks}) when is_list(checks), do: checks != []
+  defp configured_required_checks?(_gate), do: false
 
   defp require_configured_checks(failures, checks, gate) do
     present_names = Enum.map(checks, &check_name/1)
