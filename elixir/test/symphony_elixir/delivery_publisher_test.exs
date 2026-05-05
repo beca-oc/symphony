@@ -72,7 +72,7 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     end
   end
 
-  test "publisher waits briefly for GitHub check evidence after PR creation" do
+  test "publisher waits for terminal green GitHub check evidence after PR creation" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -127,7 +127,7 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
         assert body =~ "Deployment/Check: https://github.com/Subconscious-ai/example/actions/runs/99/job/100"
 
         log = File.read!(log_path)
-        assert length(Regex.scan(~r/gh pr view https:\/\/github\.com\/Subconscious-ai\/example\/pull\/99/, log)) >= 2
+        assert length(Regex.scan(~r/gh pr view https:\/\/github\.com\/Subconscious-ai\/example\/pull\/99/, log)) >= 3
       end)
     after
       restore_app_env(:delivery_publisher_poll_timeout_ms, old_timeout)
@@ -237,8 +237,15 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
           exit 0
         fi
 
-        cat <<'JSON'
+        if [ "$count" -eq 2 ]; then
+          cat <<'JSON'
     {"url":"https://github.com/Subconscious-ai/example/pull/99","isDraft":true,"headRefOid":"ignored","labels":[{"name":"symphony"}],"statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","detailsUrl":"https://github.com/Subconscious-ai/example/actions/runs/99/job/100"}]}
+    JSON
+          exit 0
+        fi
+
+        cat <<'JSON'
+    {"url":"https://github.com/Subconscious-ai/example/pull/99","isDraft":true,"headRefOid":"ignored","labels":[{"name":"symphony"}],"statusCheckRollup":[{"__typename":"CheckRun","name":"Run static checks","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/Subconscious-ai/example/actions/runs/99/job/100"}]}
     JSON
         exit 0
       fi

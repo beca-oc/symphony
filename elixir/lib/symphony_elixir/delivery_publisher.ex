@@ -262,23 +262,27 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp poll_pr_with_evidence(repo, pr_url, settings) do
-    deadline = System.monotonic_time(:millisecond) + evidence_poll_timeout_ms()
-    poll_pr_with_evidence(repo, pr_url, evidence_required?(settings), deadline, nil)
+    deadline = System.monotonic_time(:millisecond) + evidence_poll_timeout_ms(settings)
+    poll_pr_with_evidence(repo, pr_url, evidence_required?(settings), settings.evidence_gate, deadline, nil)
   end
 
-  defp poll_pr_with_evidence(repo, pr_url, evidence_required?, deadline, last_pull_request) do
+  defp poll_pr_with_evidence(repo, pr_url, evidence_required?, evidence_gate, deadline, last_pull_request) do
     case poll_pr(repo, pr_url) do
       {:ok, pull_request} ->
-        cond do
-          not evidence_required? or is_binary(deployment_url(pull_request)) ->
+        case pr_evidence_state(pull_request, evidence_required?, evidence_gate) do
+          :ready ->
             {:ok, pull_request}
 
-          System.monotonic_time(:millisecond) >= deadline ->
-            {:ok, pull_request}
+          {:failed, failures} ->
+            {:error, {:pr_checks_failed, failures}}
 
-          true ->
-            Process.sleep(evidence_poll_interval_ms())
-            poll_pr_with_evidence(repo, pr_url, evidence_required?, deadline, pull_request)
+          {:pending, failures} ->
+            if System.monotonic_time(:millisecond) >= deadline do
+              {:error, {:pr_checks_timeout, failures}}
+            else
+              Process.sleep(evidence_poll_interval_ms())
+              poll_pr_with_evidence(repo, pr_url, evidence_required?, evidence_gate, deadline, pull_request)
+            end
         end
 
       {:error, _reason} = error ->
@@ -294,8 +298,115 @@ defmodule SymphonyElixir.DeliveryPublisher do
 
   defp evidence_required?(_settings), do: false
 
-  defp evidence_poll_timeout_ms do
-    Application.get_env(:symphony_elixir, :delivery_publisher_poll_timeout_ms, 60_000)
+  defp pr_evidence_state(_pull_request, false, _evidence_gate), do: :ready
+
+  defp pr_evidence_state(pull_request, true, evidence_gate) when is_map(pull_request) do
+    checks =
+      pull_request
+      |> Map.get("statusCheckRollup", [])
+      |> List.wrap()
+
+    failures =
+      (checks
+       |> Enum.map(&check_failure(&1, evidence_gate))
+       |> Enum.reject(&is_nil/1)) ++ missing_required_check_failures(checks, evidence_gate)
+
+    cond do
+      not is_binary(deployment_url(pull_request)) ->
+        {:pending, ["missing deployment/check evidence"]}
+
+      Enum.any?(failures, &String.contains?(&1, "failed")) ->
+        {:failed, failures}
+
+      Enum.any?(failures, &String.contains?(&1, "skipped")) ->
+        {:failed, failures}
+
+      failures != [] ->
+        {:pending, failures}
+
+      true ->
+        :ready
+    end
+  end
+
+  defp pr_evidence_state(_pull_request, true, _evidence_gate), do: {:pending, ["missing pull request evidence"]}
+
+  defp check_failure(check, evidence_gate) when is_map(check) do
+    name = check_name(check)
+
+    cond do
+      check_configured?(name, evidence_gate.github_optional_checks) ->
+        nil
+
+      check_state(check) == :skipped and check_configured?(name, evidence_gate.allow_skipped_checks) ->
+        nil
+
+      true ->
+        case check_state(check) do
+          :success -> nil
+          :pending -> "required PR check still pending: #{name}"
+          :skipped -> "required PR check skipped: #{name}"
+          :failed -> "required PR check failed: #{name}"
+        end
+    end
+  end
+
+  defp check_failure(_check, _evidence_gate), do: nil
+
+  defp missing_required_check_failures(checks, evidence_gate) do
+    present_names = Enum.map(checks, &check_name/1)
+
+    evidence_gate.github_required_checks
+    |> Enum.reject(&check_configured?(&1, present_names))
+    |> Enum.map(&("missing required PR check: " <> &1))
+  end
+
+  defp check_configured?(name, configured_names) when is_binary(name) and is_list(configured_names) do
+    Enum.any?(configured_names, &(&1 == name))
+  end
+
+  defp check_configured?(_name, _configured_names), do: false
+
+  defp check_state(check) do
+    case String.upcase(to_string(Map.get(check, "__typename"))) do
+      "STATUSCONTEXT" -> status_context_state(check)
+      _ -> check_run_state(check)
+    end
+  end
+
+  defp check_run_state(check) do
+    status = check |> Map.get("status") |> to_string() |> String.upcase()
+    conclusion = check |> Map.get("conclusion") |> to_string() |> String.upcase()
+
+    cond do
+      status != "COMPLETED" -> :pending
+      conclusion == "SUCCESS" -> :success
+      conclusion == "SKIPPED" -> :skipped
+      true -> :failed
+    end
+  end
+
+  defp status_context_state(check) do
+    case check |> Map.get("state") |> to_string() |> String.upcase() do
+      "SUCCESS" -> :success
+      "FAILURE" -> :failed
+      "ERROR" -> :failed
+      _ -> :pending
+    end
+  end
+
+  defp check_name(check) do
+    Map.get(check, "name") || Map.get(check, "context") || "unknown"
+  end
+
+  defp evidence_poll_timeout_ms(settings) do
+    cond do
+      is_integer(settings.evidence_gate.timeout_seconds) ->
+        settings.evidence_gate.timeout_seconds * 1_000
+
+      true ->
+        Application.get_env(:symphony_elixir, :delivery_publisher_poll_timeout_ms, 60_000)
+    end
   end
 
   defp evidence_poll_interval_ms do

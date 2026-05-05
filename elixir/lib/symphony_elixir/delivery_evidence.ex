@@ -97,6 +97,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
       |> require_pull_request(issue, pull_request, commit_sha)
       |> require_validation(workpad)
       |> require_deployment(deployment_url)
+      |> require_pr_checks(pull_request)
       |> Enum.reverse()
 
     case failures do
@@ -265,6 +266,95 @@ defmodule SymphonyElixir.DeliveryEvidence do
     else
       ["missing deployment/check evidence" | failures]
     end
+  end
+
+  defp require_pr_checks(failures, pull_request) do
+    if Config.settings!().validation.deploy_evidence == "none" do
+      failures
+    else
+      gate = Config.settings!().evidence_gate
+      checks = status_check_rollup(pull_request)
+
+      checks
+      |> Enum.reduce(failures, &require_pr_check(&1, &2, gate))
+      |> require_configured_checks(checks, gate)
+    end
+  end
+
+  defp status_check_rollup(pull_request) when is_map(pull_request) do
+    pull_request
+    |> map_get(:statusCheckRollup)
+    |> List.wrap()
+  end
+
+  defp status_check_rollup(_pull_request), do: []
+
+  defp require_pr_check(check, failures, gate) when is_map(check) do
+    name = check_name(check)
+
+    cond do
+      check_configured?(name, gate.github_optional_checks) ->
+        failures
+
+      check_state(check) == :skipped and check_configured?(name, gate.allow_skipped_checks) ->
+        failures
+
+      true ->
+        case check_state(check) do
+          :success -> failures
+          :pending -> ["required PR check still pending: #{name}" | failures]
+          :skipped -> ["required PR check skipped: #{name}" | failures]
+          :failed -> ["required PR check failed: #{name}" | failures]
+        end
+    end
+  end
+
+  defp require_pr_check(_check, failures, _gate), do: failures
+
+  defp require_configured_checks(failures, checks, gate) do
+    present_names = Enum.map(checks, &check_name/1)
+
+    gate.github_required_checks
+    |> Enum.reject(&check_configured?(&1, present_names))
+    |> Enum.reduce(failures, fn name, acc -> ["missing required PR check: #{name}" | acc] end)
+  end
+
+  defp check_configured?(name, configured_names) when is_binary(name) and is_list(configured_names) do
+    Enum.any?(configured_names, &(&1 == name))
+  end
+
+  defp check_configured?(_name, _configured_names), do: false
+
+  defp check_state(check) do
+    case String.upcase(to_string(map_get(check, :__typename))) do
+      "STATUSCONTEXT" -> status_context_state(check)
+      _ -> check_run_state(check)
+    end
+  end
+
+  defp check_run_state(check) do
+    status = check |> map_get(:status) |> to_string() |> String.upcase()
+    conclusion = check |> map_get(:conclusion) |> to_string() |> String.upcase()
+
+    cond do
+      status != "COMPLETED" -> :pending
+      conclusion == "SUCCESS" -> :success
+      conclusion == "SKIPPED" -> :skipped
+      true -> :failed
+    end
+  end
+
+  defp status_context_state(check) do
+    case check |> map_get(:state) |> to_string() |> String.upcase() do
+      "SUCCESS" -> :success
+      "FAILURE" -> :failed
+      "ERROR" -> :failed
+      _ -> :pending
+    end
+  end
+
+  defp check_name(check) do
+    map_get(check, :name) || map_get(check, :context) || "unknown"
   end
 
   defp deployment_url(comments, pull_request) do

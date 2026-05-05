@@ -280,6 +280,39 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule EvidenceGate do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:github_required_checks, {:array, :string}, default: [])
+      field(:github_optional_checks, {:array, :string}, default: [])
+      field(:allow_skipped_checks, {:array, :string}, default: [])
+      field(:timeout_seconds, :integer)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:github_required_checks, :github_optional_checks, :allow_skipped_checks, :timeout_seconds], empty_values: [])
+      |> update_change(:github_required_checks, &normalize_string_list/1)
+      |> update_change(:github_optional_checks, &normalize_string_list/1)
+      |> update_change(:allow_skipped_checks, &normalize_string_list/1)
+      |> validate_number(:timeout_seconds, greater_than: 0)
+    end
+
+    defp normalize_string_list(values) when is_list(values) do
+      values
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+    end
+
+    defp normalize_string_list(_values), do: []
+  end
+
   defmodule Observability do
     @moduledoc false
     use Ecto.Schema
@@ -330,6 +363,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:validation, Validation, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:evidence_gate, EvidenceGate, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
   end
@@ -424,6 +458,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:validation, with: &Validation.changeset/2)
+    |> cast_embed(:evidence_gate, with: &EvidenceGate.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
   end

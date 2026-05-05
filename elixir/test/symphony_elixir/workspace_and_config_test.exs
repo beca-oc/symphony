@@ -1018,7 +1018,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       validation_fast: "pnpm ci:quick",
       validation_full: "pnpm ci:pr",
       validation_deploy_evidence: "vercel",
-      validation_evidence_required: true
+      validation_evidence_required: true,
+      evidence_gate_github_required_checks: ["Run static checks", "CodeQL"],
+      evidence_gate_github_optional_checks: ["CodeRabbit"],
+      evidence_gate_allow_skipped_checks: ["Run Storybook"],
+      evidence_gate_timeout_seconds: 1800
     )
 
     config = Config.settings!()
@@ -1031,6 +1035,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.validation.full == "pnpm ci:pr"
     assert config.validation.deploy_evidence == "vercel"
     assert config.validation.evidence_required == true
+    assert config.evidence_gate.github_required_checks == ["Run static checks", "CodeQL"]
+    assert config.evidence_gate.github_optional_checks == ["CodeRabbit"]
+    assert config.evidence_gate.allow_skipped_checks == ["Run Storybook"]
+    assert config.evidence_gate.timeout_seconds == 1800
 
     write_workflow_file!(Workflow.workflow_file_path(), validation_deploy_evidence: "ftp")
 
