@@ -1304,6 +1304,71 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "app server treats codex error notifications as failed turns" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-error-notification-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-93")
+      codex_binary = Path.join(test_root, "fake-codex")
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-93"}}}'
+            ;;
+          3)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-93"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"method":"error","params":{"error":{"message":"model requires newer Codex"}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          *)
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-error-notification",
+        identifier: "MT-93",
+        title: "Handle app-server errors",
+        description: "Ensure Codex app-server errors fail the worker turn",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-93",
+        labels: ["backend"]
+      }
+
+      assert {:error, {:codex_error, %{"error" => %{"message" => "model requires newer Codex"}}}} =
+               AppServer.run(workspace, "Surface app-server errors", issue)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "app server emits malformed events for JSON-like protocol lines that fail to decode" do
     test_root =
       Path.join(
