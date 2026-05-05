@@ -528,7 +528,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
   defp check_url(_check), do: nil
 
   defp deployment_url(comments, pull_request) do
-    deployment_url_from_comments(comments) || deployment_url_from_pr(pull_request)
+    deployment_url_from_pr(pull_request) || deployment_url_from_comments(comments)
   end
 
   defp deployment_url_from_comments(comments) when is_list(comments) do
@@ -549,7 +549,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
   defp deployment_url_from_line(line) when is_binary(line) do
     normalized = String.downcase(line)
 
-    if String.contains?(normalized, ["deploy", "preview", "vercel", "check"]) do
+    if Regex.match?(~r/^\s*[-*]?\s*(deployment|deploy|preview|vercel|check|checks|ci|status)(\/deploy)?\s*:/, normalized) do
       Regex.run(~r/https?:\/\/\S+/, line)
       |> case do
         [url | _] -> String.trim_trailing(url, ".,)")
@@ -561,16 +561,31 @@ defmodule SymphonyElixir.DeliveryEvidence do
   defp deployment_url_from_pr(nil), do: nil
 
   defp deployment_url_from_pr(pull_request) when is_map(pull_request) do
-    pull_request
-    |> map_get(:statusCheckRollup)
-    |> List.wrap()
-    |> Enum.find_value(fn
-      check when is_map(check) ->
-        map_get(check, :targetUrl) || map_get(check, :detailsUrl)
+    checks =
+      pull_request
+      |> map_get(:statusCheckRollup)
+      |> List.wrap()
 
-      _ ->
-        nil
+    required_check_url(checks) || successful_check_url(checks) || first_check_url(checks)
+  end
+
+  defp required_check_url(checks) when is_list(checks) do
+    required = required_check_names()
+
+    checks
+    |> Enum.find_value(fn check ->
+      if check_configured?(check_name(check), required), do: check_url(check)
     end)
+  end
+
+  defp successful_check_url(checks) when is_list(checks) do
+    Enum.find_value(checks, fn check ->
+      if check_state(check) == :success, do: check_url(check)
+    end)
+  end
+
+  defp first_check_url(checks) when is_list(checks) do
+    Enum.find_value(checks, &check_url/1)
   end
 
   defp pull_request_url(nil), do: nil

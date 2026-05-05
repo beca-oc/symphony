@@ -420,15 +420,34 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp deployment_url(pull_request) when is_map(pull_request) do
-    pull_request
-    |> Map.get("statusCheckRollup", [])
-    |> List.wrap()
-    |> Enum.find_value(fn
-      %{"targetUrl" => url} when is_binary(url) and url != "" -> url
-      %{"detailsUrl" => url} when is_binary(url) and url != "" -> url
-      _ -> nil
+    checks =
+      pull_request
+      |> Map.get("statusCheckRollup", [])
+      |> List.wrap()
+
+    required_check_url(checks) || successful_check_url(checks) || first_check_url(checks)
+  end
+
+  defp required_check_url(checks) when is_list(checks) do
+    required = Config.settings!().evidence_gate.github_required_checks
+
+    checks
+    |> Enum.find_value(fn check ->
+      if check_configured?(check_name(check), required), do: check_url(check)
     end)
   end
+
+  defp successful_check_url(checks) when is_list(checks) do
+    Enum.find_value(checks, fn check ->
+      if check_state(check) == :success, do: check_url(check)
+    end)
+  end
+
+  defp first_check_url(checks) when is_list(checks), do: Enum.find_value(checks, &check_url/1)
+
+  defp check_url(%{"targetUrl" => url}) when is_binary(url) and url != "", do: url
+  defp check_url(%{"detailsUrl" => url}) when is_binary(url) and url != "", do: url
+  defp check_url(_check), do: nil
 
   defp workpad_comment(issue, workspace, evidence) do
     """
