@@ -293,8 +293,8 @@ defmodule SymphonyElixir.DeliveryPublisher do
     end
   end
 
-  defp evidence_required?(%{validation: %{deploy_evidence: deploy_evidence}}),
-    do: deploy_evidence in ["vercel", "github_checks"]
+  defp evidence_required?(%{validation: %{evidence_required: true, deploy_evidence: deploy_evidence}, evidence_gate: evidence_gate}),
+    do: deploy_evidence in ["vercel", "github_checks"] or configured_required_checks?(evidence_gate)
 
   defp evidence_required?(_settings), do: false
 

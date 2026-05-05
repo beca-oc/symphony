@@ -9,7 +9,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
   alias SymphonyElixir.Linear.Issue
 
   @workpad_heading "## Codex Workpad"
-  @validation_words ~w(validation validated verify verified test tests ci passed pass exit)
+  @validation_result_pattern ~r/(validation|validate|verify|test|ci).*(pass|passed|success|succeeded|exit\s*0|0)/i
 
   @type evidence :: %{
           branch: String.t(),
@@ -96,7 +96,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
       |> require_commit(commit_sha)
       |> require_pull_request(issue, pull_request, commit_sha)
       |> require_validation(workpad)
-      |> require_deployment(deployment_url)
+      |> require_check_or_deployment_evidence(deployment_url)
       |> require_pr_checks(pull_request)
       |> Enum.reverse()
 
@@ -249,9 +249,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
   defp maybe_require_pr_reference(failures, _issue, _pull_request), do: failures
 
   defp require_validation(failures, workpad) when is_binary(workpad) do
-    normalized = String.downcase(workpad)
-
-    if Enum.any?(@validation_words, &String.contains?(normalized, &1)) do
+    if Regex.match?(@validation_result_pattern, workpad) do
       failures
     else
       ["missing validation command/result evidence" | failures]
@@ -260,25 +258,30 @@ defmodule SymphonyElixir.DeliveryEvidence do
 
   defp require_validation(failures, _workpad), do: ["missing validation command/result evidence" | failures]
 
-  defp require_deployment(failures, deployment_url) do
-    if Config.settings!().validation.deploy_evidence == "none" or is_binary(deployment_url) do
-      failures
-    else
+  defp require_check_or_deployment_evidence(failures, deployment_url) do
+    if check_or_deployment_evidence_required?() and !is_binary(deployment_url) do
       ["missing deployment/check evidence" | failures]
+    else
+      failures
     end
   end
 
   defp require_pr_checks(failures, pull_request) do
-    if Config.settings!().validation.deploy_evidence == "none" do
-      failures
-    else
+    if check_or_deployment_evidence_required?() do
       gate = Config.settings!().evidence_gate
       checks = status_check_rollup(pull_request)
 
       checks
       |> Enum.reduce(failures, &require_pr_check(&1, &2, gate))
       |> require_configured_checks(checks, gate)
+    else
+      failures
     end
+  end
+
+  defp check_or_deployment_evidence_required? do
+    settings = Config.settings!()
+    settings.validation.deploy_evidence != "none" or configured_required_checks?(settings.evidence_gate)
   end
 
   defp status_check_rollup(pull_request) when is_map(pull_request) do

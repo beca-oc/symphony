@@ -274,6 +274,83 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
     end
   end
 
+  test "evidence evaluator requires configured CI check evidence even without deploy previews" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-evidence-ci-only-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {workspace, sha} = committed_workspace!(test_root, "codex/BEC-49-marker")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        repo_github_repo: "Subconscious-ai/example",
+        validation_deploy_evidence: "none",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"]
+      )
+
+      issue = %Issue{
+        id: "issue-ci-only",
+        identifier: "BEC-49",
+        title: "CI only gate",
+        state: "In Progress"
+      }
+
+      workpad = """
+      ## Codex Workpad
+
+      Validation: bash scripts/agent/validate-fast.sh passed
+      PR: https://github.com/Subconscious-ai/example/pull/49
+      """
+
+      base_pr = %{
+        "url" => "https://github.com/Subconscious-ai/example/pull/49",
+        "isDraft" => true,
+        "headRefOid" => sha,
+        "title" => "BEC-49 ci only gate",
+        "body" => "Refs BEC-49",
+        "labels" => [%{"name" => "symphony"}]
+      }
+
+      missing_check_url =
+        Map.put(base_pr, "statusCheckRollup", [
+          %{
+            "__typename" => "CheckRun",
+            "name" => "symphony-gate",
+            "status" => "COMPLETED",
+            "conclusion" => "SUCCESS"
+          }
+        ])
+
+      assert {:error, missing_url_report} =
+               DeliveryEvidence.evaluate(issue, workspace,
+                 comments: [workpad],
+                 pull_request: missing_check_url
+               )
+
+      assert "missing deployment/check evidence" in missing_url_report.failures
+
+      complete_pr =
+        put_in(
+          missing_check_url,
+          ["statusCheckRollup", Access.at(0), "detailsUrl"],
+          "https://github.com/Subconscious-ai/example/actions/runs/49/job/1"
+        )
+
+      assert {:ok, evidence} =
+               DeliveryEvidence.evaluate(issue, workspace,
+                 comments: [workpad],
+                 pull_request: complete_pr
+               )
+
+      assert evidence.deployment_url == "https://github.com/Subconscious-ai/example/actions/runs/49/job/1"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evidence evaluator allows explicitly configured skipped checks" do
     test_root =
       Path.join(

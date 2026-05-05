@@ -146,13 +146,18 @@ Notes:
 - Use `repo.github_repo` and `validation.*` to make Symphony own the deterministic harness around
   the agent. `validation.preflight` runs before Codex starts; a failure comments on the issue and
   moves it to `Rework`. When `validation.evidence_required` is true, Symphony verifies the workpad,
-  branch, commit, draft PR, `symphony` label, validation evidence, and required deployment/check
-  evidence before moving the issue to `Human Review`.
+  branch, commit, draft PR, `symphony` label, validation evidence, pushed PR head SHA, deployment or
+  check URL, and configured required checks before moving the issue to `Human Review`.
 - Supported `validation.deploy_evidence` values are `none`, `vercel`, and `github_checks`.
 - Use `evidence_gate.github_required_checks` to name the repo-owned checks that must pass before
   Symphony can move an issue to `Human Review`. For the current engineering harness workflows, set
   this to `["symphony-gate"]`; Symphony ignores unrelated optional or experimental checks when this
-  list is present.
+  list is present. A configured required check is still required when `validation.deploy_evidence` is
+  `none`; the check details URL becomes the required check evidence.
+- Symphony appends one JSON object per completed, retried, blocked, or budget-stopped run to
+  `log/symphony-runs.ndjson` under the CLI `--logs-root`. Each record includes outcome, failure
+  bucket, runtime, retry attempt, token totals, tool-call counts, event counts, workspace, and issue
+  identifiers. Treat this file as the seed dataset for harness evals.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.

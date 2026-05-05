@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, DeliveryEvidence, DeliveryPublisher, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, DeliveryEvidence, DeliveryPublisher, RunTrace, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -140,6 +140,8 @@ defmodule SymphonyElixir.Orchestrator do
 
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
+
+              RunTrace.record(running_entry, :retry, failure_bucket(reason), %{reason: reason})
 
               next_attempt = next_retry_attempt_from_running(running_entry)
 
@@ -747,6 +749,11 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_cached_input_tokens: 0,
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
+            codex_tool_calls: 0,
+            codex_tool_call_failures: 0,
+            codex_unsupported_tool_calls: 0,
+            codex_tool_input_auto_answers: 0,
+            codex_event_counts: %{},
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now()
@@ -804,6 +811,8 @@ defmodule SymphonyElixir.Orchestrator do
       Map.get(running_entry, :harness_blocked) ->
         Logger.info("Agent task completed after Symphony harness blocker for issue_id=#{issue_id} session_id=#{session_id}; not running delivery evidence gate")
 
+        RunTrace.record(running_entry, :rework, :preflight, %{harness_blocked: Map.get(running_entry, :harness_blocked)})
+
         complete_issue(state, issue_id)
 
       DeliveryEvidence.required?() ->
@@ -827,16 +836,21 @@ defmodule SymphonyElixir.Orchestrator do
                Map.get(running_entry, :workspace_path)
              ) do
           :ok ->
+            RunTrace.record(running_entry, :human_review, :none, %{gate: :delivery_evidence})
             complete_issue(state, issue_id)
 
           {:error, reason} ->
             Logger.warning("Delivery evidence gate failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
+
+            RunTrace.record(running_entry, :rework, failure_bucket(reason), %{reason: reason})
 
             complete_issue(state, issue_id)
         end
 
       Config.settings!().agent.continue_after_normal_exit ->
         Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+
+        RunTrace.record(running_entry, :continuation, :active_issue, %{reason: :normal_exit_active_issue})
 
         state
         |> complete_issue(issue_id)
@@ -849,6 +863,8 @@ defmodule SymphonyElixir.Orchestrator do
 
       true ->
         Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; not continuing because agent.continue_after_normal_exit=false")
+
+        RunTrace.record(running_entry, :completed, :none, %{reason: :normal_exit})
 
         complete_issue(state, issue_id)
     end
@@ -920,6 +936,13 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.warning(
           "Issue exceeded #{budget_name}: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} total_tokens=#{total_tokens} uncached_total_tokens=#{uncached_total_tokens} #{budget_token_label}=#{budget_tokens} limit=#{limit}; stopping active agent without retry"
         )
+
+        RunTrace.record(running_entry, :stopped, :token_budget, %{
+          budget_type: budget_type,
+          limit: limit,
+          total_tokens: total_tokens,
+          uncached_total_tokens: uncached_total_tokens
+        })
 
         state = record_session_completion_totals(state, running_entry)
 
@@ -1266,6 +1289,23 @@ defmodule SymphonyElixir.Orchestrator do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
 
+  defp failure_bucket({:evidence_gate_failed, _failures}), do: :evidence_gate
+  defp failure_bucket({:validation_failed, _status, _output}), do: :validation
+  defp failure_bucket({:pr_checks_failed, _failures}), do: :ci_check
+  defp failure_bucket({:pr_checks_timeout, _failures}), do: :ci_check_timeout
+  defp failure_bucket({:git_push_failed, _status, _output}), do: :git_push
+  defp failure_bucket({:gh_pr_create_failed, _output}), do: :github_pr
+  defp failure_bucket({:gh_pr_create_failed, _status, _output}), do: :github_pr
+  defp failure_bucket({:gh_label_failed, _status, _output}), do: :github_label
+  defp failure_bucket({:turn_failed, _params}), do: :codex_turn
+  defp failure_bucket({:turn_cancelled, _params}), do: :codex_turn
+  defp failure_bucket({:codex_error, _params}), do: :codex_turn
+  defp failure_bucket({:port_exit, _status}), do: :codex_runtime
+  defp failure_bucket(:turn_timeout), do: :codex_timeout
+  defp failure_bucket(:preflight), do: :preflight
+  defp failure_bucket(reason) when is_atom(reason), do: reason
+  defp failure_bucket(_reason), do: :unknown
+
   defp available_slots(%State{} = state) do
     max(
       (state.max_concurrent_agents || Config.settings!().agent.max_concurrent_agents) -
@@ -1394,6 +1434,8 @@ defmodule SymphonyElixir.Orchestrator do
     last_reported_output = Map.get(running_entry, :codex_last_reported_output_tokens, 0)
     last_reported_total = Map.get(running_entry, :codex_last_reported_total_tokens, 0)
     turn_count = Map.get(running_entry, :turn_count, 0)
+    event_counts = increment_event_count(Map.get(running_entry, :codex_event_counts, %{}), event)
+    tool_counts = codex_tool_count_delta(event)
 
     {
       Map.merge(running_entry, %{
@@ -1412,6 +1454,11 @@ defmodule SymphonyElixir.Orchestrator do
         codex_last_reported_cached_input_tokens: max(last_reported_cached_input, token_delta.cached_input_reported),
         codex_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
         codex_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
+        codex_tool_calls: Map.get(running_entry, :codex_tool_calls, 0) + tool_counts.total,
+        codex_tool_call_failures: Map.get(running_entry, :codex_tool_call_failures, 0) + tool_counts.failed,
+        codex_unsupported_tool_calls: Map.get(running_entry, :codex_unsupported_tool_calls, 0) + tool_counts.unsupported,
+        codex_tool_input_auto_answers: Map.get(running_entry, :codex_tool_input_auto_answers, 0) + tool_counts.user_input_auto_answers,
+        codex_event_counts: event_counts,
         turn_count: turn_count_for_update(turn_count, Map.get(running_entry, :session_id), update)
       }),
       token_delta
@@ -1461,6 +1508,22 @@ defmodule SymphonyElixir.Orchestrator do
       timestamp: update[:timestamp]
     }
   end
+
+  defp increment_event_count(counts, event) when is_map(counts) do
+    key = to_string(event || "unknown")
+    Map.update(counts, key, 1, &(&1 + 1))
+  end
+
+  defp increment_event_count(_counts, event), do: increment_event_count(%{}, event)
+
+  defp codex_tool_count_delta(:tool_call_completed), do: %{total: 1, failed: 0, unsupported: 0, user_input_auto_answers: 0}
+  defp codex_tool_count_delta(:tool_call_failed), do: %{total: 1, failed: 1, unsupported: 0, user_input_auto_answers: 0}
+  defp codex_tool_count_delta(:unsupported_tool_call), do: %{total: 1, failed: 1, unsupported: 1, user_input_auto_answers: 0}
+
+  defp codex_tool_count_delta(:tool_input_auto_answered),
+    do: %{total: 0, failed: 0, unsupported: 0, user_input_auto_answers: 1}
+
+  defp codex_tool_count_delta(_event), do: %{total: 0, failed: 0, unsupported: 0, user_input_auto_answers: 0}
 
   defp schedule_tick(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do
     if is_reference(state.tick_timer_ref) do
