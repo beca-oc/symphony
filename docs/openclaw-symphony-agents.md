@@ -2,6 +2,33 @@
 
 These instructions define the two OpenClaw agents that should operate around Symphony. Linear is the control plane. Symphony is the code foreman. OpenClaw should write, inspect, and merge through deterministic gates instead of treating agent output as sufficient evidence.
 
+## OpenClaw Operating Model
+
+OpenClaw should not be treated as a second coding foreman for these repos. Its job is coordination, review, policy, and durable oversight. Symphony remains the component that launches Codex workers in isolated issue workspaces.
+
+Use these OpenClaw primitives:
+
+- Dedicated agents: create separate OpenClaw agents for Product Engineer and Reviewer/Merge Captain. Each must have its own workspace, `agentDir`, auth profiles, and session store.
+- Workspace instructions: put the standing authority, escalation rules, and forbidden actions directly in each agent workspace `AGENTS.md` so OpenClaw injects them every session.
+- Background task ledger: use OpenClaw task records for detached work started by the OpenClaw agents. Do not rely on chat scrollback as the run log.
+- Trajectory bundles: export OpenClaw trajectories for disputed or failed runs and attach the bundle path or manifest summary to the Linear issue.
+- Context hygiene: keep `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `USER.md`, and `MEMORY.md` short. Use `/context list`, `/context detail`, and `/usage tokens` during proving runs to detect prompt bloat.
+- Tool constraints: configure tool allow/deny lists, exec approvals, sandboxing, and loop detection as hard controls. Prompt instructions are not enough.
+- Codex harness: do not force the OpenClaw Codex harness globally. If an OpenClaw agent needs native Codex app-server execution, create a dedicated Codex-only agent with `model: "openai/gpt-5.5"` and `agentRuntime.id: "codex"`. Symphony-managed repo work should still flow through Symphony unless the human explicitly chooses otherwise.
+
+Documentation basis:
+
+- OpenClaw Agent Runtime: `https://docs.openclaw.ai/concepts/agent`
+- OpenClaw Agent Workspace: `https://docs.openclaw.ai/concepts/agent-workspace`
+- OpenClaw Multi-Agent Routing: `https://docs.openclaw.ai/concepts/multi-agent`
+- OpenClaw Standing Orders: `https://docs.openclaw.ai/automation/standing-orders`
+- OpenClaw Background Tasks: `https://docs.openclaw.ai/automation/tasks`
+- OpenClaw Trajectory Bundles: `https://docs.openclaw.ai/tools/trajectory`
+- OpenClaw Codex Harness: `https://docs.openclaw.ai/plugins/codex-harness`
+- OpenClaw Context: `https://docs.openclaw.ai/concepts/context`
+- OpenClaw Exec Approvals: `https://docs.openclaw.ai/tools/exec-approvals`
+- OpenClaw Tool-loop Detection: `https://docs.openclaw.ai/tools/loop-detection`
+
 ## Allowed Systems
 
 OpenClaw agents may create, review, and merge Symphony-managed work only for these systems:
@@ -32,6 +59,7 @@ Turn product or engineering intent into bounded Linear work that Symphony can ex
 - Add labels: `coding-agent`, repo label, risk label, and proof level label.
 - Define acceptance criteria, validation commands, deploy evidence, and rollback notes.
 - Move issues into a Symphony-active state only after the issue is mechanically ready.
+- Record the OpenClaw task id, session id, and trajectory export path when the planning run is detached or disputed.
 
 ### Forbidden Actions
 
@@ -40,6 +68,8 @@ Turn product or engineering intent into bounded Linear work that Symphony can ex
 - Do not ask Symphony to work without a repo, risk tier, validation command, and evidence rule.
 - Do not create cross-repo work as one giant issue.
 - Do not ask for live ingest, migrations, billing, auth, production deploys, or destructive data operations without explicit human approval and side-effect boundaries.
+- Do not use OpenClaw sub-agents to bypass repo allowlists, risk tiers, or required Linear evidence.
+- Do not launch Codex directly for repo delivery unless the human explicitly opts out of Symphony for that issue.
 
 ### Ticket Template
 
@@ -121,6 +151,8 @@ Check Symphony work mechanically, review it semantically, and merge only when po
 - Draft PR URL.
 - Required check URL.
 - Risk tier from the Linear issue.
+- OpenClaw task id or session id for the review run.
+- OpenClaw trajectory export path for failed, disputed, or auto-merged reviews.
 
 ### Mechanical Review Checklist
 
@@ -139,6 +171,7 @@ Block merge if any item is missing:
 - `check_url` points to GitHub Actions, Vercel, Checkly, or another real check/deploy URL. It must not point to Linear.
 - `failure_bucket` is `none`.
 - `manual_rescue_count` is `0` for proof runs.
+- Symphony trace and OpenClaw task record agree on issue id, PR URL, head SHA, final state, and failure bucket.
 
 ### Semantic Review Checklist
 
@@ -150,6 +183,8 @@ Block merge if any item is true:
 - The PR hides a failed or skipped validation.
 - The PR handles only the happy path when error, empty, loading, or edge cases are part of the user journey.
 - The PR introduces secrets, credentials, destructive side effects, migrations, billing changes, or auth changes without explicit human approval.
+- The OpenClaw review used a stale PR head SHA or stale Symphony trace.
+- A native Codex/OpenClaw review says "looks good" but deterministic evidence is incomplete.
 
 ### Merge Policy
 
@@ -169,6 +204,7 @@ If CI or evidence fails:
 2. Move the issue to `Rework`.
 3. Create a bounded repair issue or assign the same issue back to Symphony only if the failure is deterministic and recoverable.
 4. Require the repair PR to include both the failing check URL and the passing check URL.
+5. Record the OpenClaw task id and trajectory export path for the repair decision.
 
 ### Restart / Resume Review
 
@@ -206,3 +242,5 @@ Do not call the system ready for autonomous multi-day engineering until all four
 - One restart/resume exercise.
 - One merge conflict recovery exercise.
 - One multi-PR dependency chain.
+- One OpenClaw trajectory-backed Product Engineer run.
+- One OpenClaw trajectory-backed Reviewer/Merge Captain run.
