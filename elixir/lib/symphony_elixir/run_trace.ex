@@ -21,11 +21,14 @@ defmodule SymphonyElixir.RunTrace do
   def record(running_entry, outcome, failure_bucket, details \\ %{})
 
   def record(running_entry, outcome, failure_bucket, details) when is_map(running_entry) and is_map(details) do
+    sanitized_details = sanitize(details)
+
     payload =
       running_entry
       |> base_payload(outcome, failure_bucket)
+      |> merge_detail_evidence(sanitized_details)
       |> Map.merge(%{
-        details: sanitize(details),
+        details: sanitized_details,
         recorded_at: DateTime.utc_now() |> DateTime.to_iso8601()
       })
 
@@ -44,8 +47,12 @@ defmodule SymphonyElixir.RunTrace do
       issue_id: Map.get(running_entry, :issue_id) || Map.get(issue || %{}, :id),
       issue_identifier: Map.get(running_entry, :identifier) || Map.get(issue || %{}, :identifier),
       issue_state: Map.get(issue || %{}, :state),
+      repo: repo_payload(running_entry),
       outcome: to_string(outcome),
       failure_bucket: to_string(failure_bucket || "none"),
+      pr_url: evidence_url(running_entry, :pr_url),
+      check_url: evidence_url(running_entry, :check_url),
+      manual_rescue_count: manual_rescue_count(running_entry),
       session_id: Map.get(running_entry, :session_id),
       workspace_path: Map.get(running_entry, :workspace_path),
       worker_host: Map.get(running_entry, :worker_host),
@@ -83,6 +90,56 @@ defmodule SymphonyElixir.RunTrace do
       {:error, reason} ->
         Logger.warning("Failed to append Symphony run trace path=#{path}: #{inspect(reason)}")
         :ok
+    end
+  end
+
+  defp repo_payload(running_entry) do
+    case Map.get(running_entry, :repo_name) || get_in(running_entry, [:repo, :name]) do
+      name when is_binary(name) and name != "" -> %{name: name}
+      _ -> nil
+    end
+  end
+
+  defp evidence_url(running_entry, key) do
+    case Map.get(running_entry, key) || get_in(running_entry, [:delivery_evidence, key]) do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp merge_detail_evidence(payload, details) when is_map(payload) and is_map(details) do
+    payload
+    |> maybe_put_detail_value(:pr_url, details, "pr_url")
+    |> maybe_put_detail_value(:check_url, details, "check_url")
+    |> maybe_put_manual_rescue_count(details)
+  end
+
+  defp maybe_put_detail_value(payload, payload_key, details, details_key) do
+    if present?(Map.get(payload, payload_key)) do
+      payload
+    else
+      value = Map.get(details, details_key)
+
+      if present?(value) do
+        Map.put(payload, payload_key, value)
+      else
+        payload
+      end
+    end
+  end
+
+  defp present?(value) when is_binary(value), do: value != ""
+  defp present?(value), do: not is_nil(value)
+
+  defp maybe_put_manual_rescue_count(payload, %{"manual_rescue_count" => value}) when is_integer(value) and value >= 0,
+    do: Map.put(payload, :manual_rescue_count, value)
+
+  defp maybe_put_manual_rescue_count(payload, _details), do: payload
+
+  defp manual_rescue_count(running_entry) do
+    case Map.get(running_entry, :manual_rescue_count) do
+      value when is_integer(value) and value >= 0 -> value
+      _ -> 0
     end
   end
 

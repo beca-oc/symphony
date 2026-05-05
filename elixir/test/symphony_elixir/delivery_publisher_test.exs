@@ -187,6 +187,58 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     end
   end
 
+  test "publisher does not duplicate an existing Codex workpad on resume" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-publisher-resume-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace = Path.join(test_root, "workspace")
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "README.md"), "# publisher\n")
+      System.cmd("git", ["-C", workspace, "init", "-b", "codex/BEC-101-marker"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "publisher resume evidence"])
+      System.cmd("git", ["-C", workspace, "remote", "add", "origin", "https://github.com/Subconscious-ai/example.git"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repo_github_repo: "Subconscious-ai/example",
+        repo_default_branch: "main",
+        validation_fast: "printf 'fast validation passed\\n'",
+        validation_deploy_evidence: "none",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"]
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      Application.put_env(:symphony_elixir, :memory_tracker_comments, %{"issue-publish" => ["## Codex Workpad\n\nExisting evidence"]})
+
+      issue = %Issue{
+        id: "issue-publish",
+        identifier: "BEC-101",
+        title: "Resume publishing",
+        state: "In Progress",
+        url: "https://linear.app/example/issue/BEC-101/resume-publishing"
+      }
+
+      with_fake_gh_and_git(fn _log_path ->
+        System.put_env("GH_VIEW_REQUIRED_GATE", "1")
+
+        assert {:ok, _evidence} = DeliveryPublisher.publish(issue, workspace)
+        refute_receive {:memory_tracker_comment, "issue-publish", _body}, 100
+      end)
+    after
+      System.delete_env("GH_VIEW_REQUIRED_GATE")
+      Application.delete_env(:symphony_elixir, :memory_tracker_comments)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "publisher waits for configured required check when deploy evidence is none" do
     test_root =
       Path.join(

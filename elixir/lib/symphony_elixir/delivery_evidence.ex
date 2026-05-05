@@ -29,7 +29,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
   @spec finalize_issue(Issue.t(), Path.t() | nil, keyword()) :: :ok | {:error, term()}
   def finalize_issue(%Issue{} = issue, workspace, opts \\ []) do
     if required?() do
-      case evaluation_for_issue(issue, workspace, opts) do
+      case poll_evaluation_for_issue(issue, workspace, opts) do
         {:ok, evidence} -> approve_issue(issue, evidence)
         {:error, report} -> block_issue(issue, report)
         {:fetch_error, reason} -> {:error, reason}
@@ -38,6 +38,44 @@ defmodule SymphonyElixir.DeliveryEvidence do
       :ok
     end
   end
+
+  @spec failure_bucket(term()) :: atom()
+  def failure_bucket({:evidence_gate_failed, failures}) when is_list(failures), do: failure_bucket(failures)
+  def failure_bucket({:validation_failed, _status, _output}), do: :validation_failed
+  def failure_bucket({:pr_checks_failed, _failures}), do: :ci_failed
+  def failure_bucket({:pr_checks_timeout, _failures}), do: :ci_timeout
+  def failure_bucket({:git_push_failed, _status, _output}), do: :git_push_failed
+  def failure_bucket({:gh_pr_create_failed, _output}), do: :missing_pr
+  def failure_bucket({:gh_pr_create_failed, _status, _output}), do: :missing_pr
+  def failure_bucket({:gh_label_failed, _status, _output}), do: :missing_label
+
+  def failure_bucket(failures) when is_list(failures) do
+    text =
+      failures
+      |> Enum.map_join("\n", &to_string/1)
+      |> String.downcase()
+
+    cond do
+      String.contains?(text, "missing linear workpad") -> :missing_workpad
+      String.contains?(text, "branch does not start") -> :branch_mismatch
+      String.contains?(text, "missing git branch") -> :branch_mismatch
+      String.contains?(text, "missing final commit sha") -> :missing_pushed_sha
+      String.contains?(text, "head commit does not match") -> :pushed_sha_mismatch
+      String.contains?(text, "missing draft pull request") -> :missing_pr
+      String.contains?(text, "not draft") -> :missing_pr
+      String.contains?(text, "missing symphony label") -> :missing_label
+      String.contains?(text, "missing validation") -> :missing_validation
+      String.contains?(text, "missing deployment/check evidence") -> :missing_deploy_evidence
+      String.contains?(text, "check failed") -> :ci_failed
+      String.contains?(text, "check skipped") -> :ci_failed
+      String.contains?(text, "check still pending") -> :ci_pending
+      String.contains?(text, "missing required pr check") -> :ci_pending
+      true -> :evidence_gate
+    end
+  end
+
+  def failure_bucket(reason) when is_atom(reason), do: reason
+  def failure_bucket(_reason), do: :unknown
 
   defp evaluation_for_issue(issue, workspace, opts) do
     case comments_for_issue(issue, opts) do
@@ -51,14 +89,14 @@ defmodule SymphonyElixir.DeliveryEvidence do
   end
 
   defp approve_issue(%Issue{id: issue_id}, evidence) do
-    case Tracker.create_comment(issue_id, success_comment(evidence)) do
+    case create_comment_once(issue_id, "## Symphony Evidence Gate", success_comment(evidence)) do
       :ok -> Tracker.update_issue_state(issue_id, "Human Review")
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp block_issue(%Issue{id: issue_id}, report) do
-    case Tracker.create_comment(issue_id, blocker_comment(report)) do
+    case create_comment_once(issue_id, "## Symphony Harness Blocker", blocker_comment(report)) do
       :ok ->
         case Tracker.update_issue_state(issue_id, "Rework") do
           :ok -> {:error, {:evidence_gate_failed, report.failures}}
@@ -68,6 +106,60 @@ defmodule SymphonyElixir.DeliveryEvidence do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp create_comment_once(issue_id, heading, body) when is_binary(issue_id) and is_binary(heading) and is_binary(body) do
+    case Tracker.fetch_comments(issue_id) do
+      {:ok, comments} ->
+        if Enum.any?(comments, &(is_binary(&1) and String.contains?(&1, heading))) do
+          :ok
+        else
+          Tracker.create_comment(issue_id, body)
+        end
+
+      {:error, _reason} ->
+        Tracker.create_comment(issue_id, body)
+    end
+  end
+
+  defp poll_evaluation_for_issue(issue, workspace, opts) do
+    deadline = System.monotonic_time(:millisecond) + poll_timeout_ms()
+    poll_evaluation_for_issue(issue, workspace, opts, deadline, nil)
+  end
+
+  defp poll_evaluation_for_issue(issue, workspace, opts, deadline, last_report) do
+    case evaluation_for_issue(issue, workspace, opts) do
+      {:error, report} = error ->
+        if pending_report?(report) and System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(poll_interval_ms())
+          poll_evaluation_for_issue(issue, workspace, opts, deadline, report)
+        else
+          error
+        end
+
+      {:fetch_error, _reason} = error ->
+        case last_report do
+          nil -> error
+          report -> {:error, report}
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp pending_report?(%{failures: failures}) when is_list(failures) do
+    failure_bucket(failures) in [:ci_pending, :missing_deploy_evidence]
+  end
+
+  defp pending_report?(_report), do: false
+
+  defp poll_timeout_ms do
+    Application.get_env(:symphony_elixir, :delivery_evidence_poll_timeout_ms, 60_000)
+  end
+
+  defp poll_interval_ms do
+    Application.get_env(:symphony_elixir, :delivery_evidence_poll_interval_ms, 2_000)
   end
 
   @spec evaluate(Issue.t(), Path.t() | nil, keyword()) ::
@@ -118,7 +210,11 @@ defmodule SymphonyElixir.DeliveryEvidence do
   defp pull_request_for_workspace(workspace, opts) do
     case Keyword.fetch(opts, :pull_request) do
       {:ok, pull_request} -> pull_request
-      :error -> fetch_pull_request(workspace)
+      :error ->
+        case Keyword.fetch(opts, :pull_request_fetcher) do
+          {:ok, fetcher} when is_function(fetcher, 0) -> fetcher.()
+          _ -> fetch_pull_request(workspace)
+        end
     end
   end
 
@@ -434,6 +530,11 @@ defmodule SymphonyElixir.DeliveryEvidence do
     PR: #{evidence.pr_url || "n/a"}
     Deployment/Check: #{evidence.deployment_url || "n/a"}
 
+    ### Measurement
+    - PR URL: #{evidence.pr_url || "n/a"}
+    - Check/Deploy URL: #{evidence.deployment_url || "n/a"}
+    - Failure bucket: none
+
     Symphony moved this issue to Human Review after verifying required delivery evidence.
     """
   end
@@ -448,6 +549,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
 
     Gate: delivery evidence
     Result: failed
+    Failure bucket: #{failure_bucket(report.failures)}
 
     #{failures}
 

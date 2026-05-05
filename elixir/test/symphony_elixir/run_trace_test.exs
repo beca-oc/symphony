@@ -17,6 +17,7 @@ defmodule SymphonyElixir.RunTraceTest do
         %{
           identifier: "BEC-123",
           issue: %Issue{id: "issue-123", identifier: "BEC-123", state: "In Progress"},
+          repo_name: "ai-chatbot",
           session_id: "thread-turn",
           workspace_path: "/tmp/workspace",
           worker_host: nil,
@@ -37,14 +38,23 @@ defmodule SymphonyElixir.RunTraceTest do
         },
         :rework,
         :evidence_gate,
-        %{reason: {:evidence_gate_failed, ["missing PR"]}}
+        %{
+          reason: {:evidence_gate_failed, ["missing PR"]},
+          pr_url: "https://github.com/Subconscious-ai/ai-chatbot/pull/123",
+          check_url: "https://github.com/Subconscious-ai/ai-chatbot/actions/runs/1/job/2",
+          manual_rescue_count: 1
+        }
       )
 
       [line] = trace_file |> File.read!() |> String.trim() |> String.split("\n")
       assert {:ok, payload} = Jason.decode(line)
       assert payload["issue_identifier"] == "BEC-123"
+      assert payload["repo"] == %{"name" => "ai-chatbot"}
       assert payload["outcome"] == "rework"
       assert payload["failure_bucket"] == "evidence_gate"
+      assert payload["pr_url"] == "https://github.com/Subconscious-ai/ai-chatbot/pull/123"
+      assert payload["check_url"] == "https://github.com/Subconscious-ai/ai-chatbot/actions/runs/1/job/2"
+      assert payload["manual_rescue_count"] == 1
       assert payload["retry_attempt"] == 2
       assert payload["tokens"]["uncached_total_tokens"] == 105
       assert payload["tool_calls"]["total"] == 3

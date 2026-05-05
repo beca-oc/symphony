@@ -1289,14 +1289,14 @@ defmodule SymphonyElixir.Orchestrator do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
 
-  defp failure_bucket({:evidence_gate_failed, _failures}), do: :evidence_gate
-  defp failure_bucket({:validation_failed, _status, _output}), do: :validation
-  defp failure_bucket({:pr_checks_failed, _failures}), do: :ci_check
-  defp failure_bucket({:pr_checks_timeout, _failures}), do: :ci_check_timeout
-  defp failure_bucket({:git_push_failed, _status, _output}), do: :git_push
-  defp failure_bucket({:gh_pr_create_failed, _output}), do: :github_pr
-  defp failure_bucket({:gh_pr_create_failed, _status, _output}), do: :github_pr
-  defp failure_bucket({:gh_label_failed, _status, _output}), do: :github_label
+  defp failure_bucket({:evidence_gate_failed, _failures} = reason), do: DeliveryEvidence.failure_bucket(reason)
+  defp failure_bucket({:validation_failed, _status, _output} = reason), do: DeliveryEvidence.failure_bucket(reason)
+  defp failure_bucket({:pr_checks_failed, _failures} = reason), do: DeliveryEvidence.failure_bucket(reason)
+  defp failure_bucket({:pr_checks_timeout, _failures} = reason), do: DeliveryEvidence.failure_bucket(reason)
+  defp failure_bucket({:git_push_failed, _status, _output} = reason), do: DeliveryEvidence.failure_bucket(reason)
+  defp failure_bucket({:gh_pr_create_failed, _output} = reason), do: DeliveryEvidence.failure_bucket(reason)
+  defp failure_bucket({:gh_pr_create_failed, _status, _output} = reason), do: DeliveryEvidence.failure_bucket(reason)
+  defp failure_bucket({:gh_label_failed, _status, _output} = reason), do: DeliveryEvidence.failure_bucket(reason)
   defp failure_bucket({:turn_failed, _params}), do: :codex_turn
   defp failure_bucket({:turn_cancelled, _params}), do: :codex_turn
   defp failure_bucket({:codex_error, _params}), do: :codex_turn

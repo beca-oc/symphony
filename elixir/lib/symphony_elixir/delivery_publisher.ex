@@ -47,7 +47,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
         validation_output: validation_output
       }
 
-      with :ok <- Tracker.create_comment(issue.id, workpad_comment(issue, workspace, evidence)) do
+      with :ok <- create_comment_once(issue.id, "## Codex Workpad", workpad_comment(issue, workspace, evidence)) do
         {:ok, evidence}
       end
     else
@@ -450,6 +450,20 @@ defmodule SymphonyElixir.DeliveryPublisher do
     ### Notes / Blockers
     - _none_
     """
+  end
+
+  defp create_comment_once(issue_id, heading, body) when is_binary(issue_id) and is_binary(heading) and is_binary(body) do
+    case Tracker.fetch_comments(issue_id) do
+      {:ok, comments} ->
+        if Enum.any?(comments, &(is_binary(&1) and String.contains?(&1, heading))) do
+          :ok
+        else
+          Tracker.create_comment(issue_id, body)
+        end
+
+      {:error, _reason} ->
+        Tracker.create_comment(issue_id, body)
+    end
   end
 
   defp maybe_create_blocker_workpad(%Issue{id: issue_id} = issue, workspace, reason) when is_binary(issue_id) do
