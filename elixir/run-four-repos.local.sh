@@ -22,9 +22,7 @@ if [[ "${1:-}" == "--dry-run" ]]; then
   exit 0
 fi
 
-if [[ ! -x ./bin/symphony ]]; then
-  mise exec -- mix build
-fi
+mise exec -- mix build
 
 ACK="--i-understand-that-this-will-be-running-without-the-usual-guardrails"
 
