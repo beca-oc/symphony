@@ -125,6 +125,79 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
     end
   end
 
+  test "evidence evaluator trusts fresh publisher validation when Linear comments are stale" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-evidence-publisher-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {workspace, sha} = committed_workspace!(test_root, "codex/BEC-44-marker")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        repo_github_repo: "Subconscious-ai/example",
+        validation_deploy_evidence: "github_checks",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"]
+      )
+
+      issue = %Issue{
+        id: "issue-publisher",
+        identifier: "BEC-44",
+        title: "Publisher evidence",
+        state: "In Progress"
+      }
+
+      stale_comments = [
+        """
+        ## Codex Workpad
+
+        Validation: blocked before complete publication
+        """
+      ]
+
+      pull_request = %{
+        "url" => "https://github.com/Subconscious-ai/example/pull/44",
+        "isDraft" => true,
+        "headRefOid" => sha,
+        "title" => "BEC-44 publisher delivery",
+        "body" => "Refs BEC-44",
+        "labels" => [%{"name" => "symphony"}],
+        "statusCheckRollup" => [
+          %{
+            "__typename" => "CheckRun",
+            "name" => "symphony-gate",
+            "status" => "COMPLETED",
+            "conclusion" => "SUCCESS",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/44/job/1"
+          }
+        ]
+      }
+
+      publisher_evidence = %{
+        branch: "codex/BEC-44-marker",
+        commit_sha: sha,
+        pr_url: "https://github.com/Subconscious-ai/example/pull/44",
+        deployment_url: "https://github.com/Subconscious-ai/example/actions/runs/44/job/1",
+        validation_command: "bash scripts/agent/validate-fast.sh",
+        validation_output: "agent readiness: ok\nall tests passed"
+      }
+
+      assert {:ok, evidence} =
+               DeliveryEvidence.evaluate(issue, workspace,
+                 comments: stale_comments,
+                 pull_request: pull_request,
+                 publisher_evidence: publisher_evidence
+               )
+
+      assert evidence.workpad =~ "Validation: `bash scripts/agent/validate-fast.sh` -> pass"
+      assert evidence.deployment_url == "https://github.com/Subconscious-ai/example/actions/runs/44/job/1"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evidence evaluator blocks pending and failed required PR checks" do
     test_root =
       Path.join(

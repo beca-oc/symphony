@@ -101,7 +101,11 @@ defmodule SymphonyElixir.DeliveryEvidence do
     case comments_for_issue(issue, opts) do
       {:ok, comments} ->
         pull_request = pull_request_for_workspace(workspace, opts)
-        evaluate(issue, workspace, comments: comments, pull_request: pull_request)
+        evaluate(issue, workspace,
+          comments: comments,
+          pull_request: pull_request,
+          publisher_evidence: Keyword.get(opts, :publisher_evidence)
+        )
 
       {:error, reason} ->
         {:fetch_error, reason}
@@ -200,11 +204,12 @@ defmodule SymphonyElixir.DeliveryEvidence do
   def evaluate(%Issue{} = issue, workspace, opts \\ []) do
     comments = Keyword.get(opts, :comments, [])
     pull_request = Keyword.get(opts, :pull_request)
-    workpad = find_workpad(comments)
+    publisher_evidence = Keyword.get(opts, :publisher_evidence)
+    workpad = workpad_from_publisher_evidence(publisher_evidence) || find_workpad(comments)
     branch = git_value(workspace, ["rev-parse", "--abbrev-ref", "HEAD"])
     commit_sha = git_value(workspace, ["rev-parse", "HEAD"])
     pr_url = pull_request_url(pull_request)
-    deployment_url = deployment_url(comments, pull_request)
+    deployment_url = deployment_url(comments, pull_request) || publisher_deployment_url(publisher_evidence)
 
     evidence = %{
       branch: branch,
@@ -310,6 +315,34 @@ defmodule SymphonyElixir.DeliveryEvidence do
   end
 
   defp find_workpad(_comments), do: nil
+
+  defp workpad_from_publisher_evidence(evidence) when is_map(evidence) do
+    validation_command = map_get(evidence, :validation_command)
+    validation_output = map_get(evidence, :validation_output)
+
+    if present?(validation_command) and present?(validation_output) do
+      """
+      ## Codex Workpad
+
+      Branch: #{map_get(evidence, :branch)}
+      Final commit SHA: `#{map_get(evidence, :commit_sha)}`
+      Validation: `#{validation_command}` -> pass
+      Validation output:
+      ```
+      #{validation_output}
+      ```
+      Deployment/Check: #{map_get(evidence, :deployment_url) || "n/a"}
+      """
+    end
+  end
+
+  defp workpad_from_publisher_evidence(_evidence), do: nil
+
+  defp publisher_deployment_url(evidence) when is_map(evidence), do: map_get(evidence, :deployment_url)
+  defp publisher_deployment_url(_evidence), do: nil
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
 
   defp require_workpad(failures, workpad) when is_binary(workpad), do: failures
   defp require_workpad(failures, _workpad), do: ["missing Linear workpad comment headed ## Codex Workpad" | failures]
