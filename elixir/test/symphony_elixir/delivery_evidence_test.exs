@@ -1088,6 +1088,98 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
     end
   end
 
+  test "finalize_issue uses workflow evidence timeout instead of the short app default" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-finalize-workflow-timeout-#{System.unique_integer([:positive])}"
+      )
+
+    old_timeout = Application.get_env(:symphony_elixir, :delivery_evidence_poll_timeout_ms)
+    old_interval = Application.get_env(:symphony_elixir, :delivery_evidence_poll_interval_ms)
+
+    try do
+      Application.put_env(:symphony_elixir, :delivery_evidence_poll_timeout_ms, 0)
+      Application.put_env(:symphony_elixir, :delivery_evidence_poll_interval_ms, 1)
+
+      {workspace, sha} = committed_workspace!(test_root, "codex/BEC-52-marker")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        validation_deploy_evidence: "github_checks",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"],
+        evidence_gate_require_all_checks: true,
+        evidence_gate_timeout_seconds: 1
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-finalize-workflow-timeout",
+        identifier: "BEC-52",
+        title: "Finalize workflow timeout",
+        state: "In Progress"
+      }
+
+      workpad = """
+      ## Codex Workpad
+
+      Validation: mix test passed
+      PR: https://github.com/Subconscious-ai/example/pull/52
+      Check: https://github.com/Subconscious-ai/example/actions/runs/52/job/1
+      """
+
+      base_pr = %{
+        "url" => "https://github.com/Subconscious-ai/example/pull/52",
+        "isDraft" => true,
+        "headRefOid" => sha,
+        "title" => "BEC-52 finalization",
+        "body" => "Refs BEC-52",
+        "labels" => [%{"name" => "symphony"}]
+      }
+
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      pull_request_fetcher = fn ->
+        count = Agent.get_and_update(counter, &{&1 + 1, &1 + 1})
+
+        check =
+          if count == 1 do
+            %{
+              "__typename" => "CheckRun",
+              "name" => "symphony-gate",
+              "status" => "IN_PROGRESS",
+              "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/52/job/1"
+            }
+          else
+            %{
+              "__typename" => "CheckRun",
+              "name" => "symphony-gate",
+              "status" => "COMPLETED",
+              "conclusion" => "SUCCESS",
+              "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/52/job/1"
+            }
+          end
+
+        Map.put(base_pr, "statusCheckRollup", [check])
+      end
+
+      assert :ok =
+               DeliveryEvidence.finalize_issue(issue, workspace,
+                 comments: [workpad],
+                 pull_request_fetcher: pull_request_fetcher
+               )
+
+      assert Agent.get(counter, & &1) >= 2
+      assert_receive {:memory_tracker_state_update, "issue-finalize-workflow-timeout", "Human Review"}, 500
+    after
+      restore_app_env(:delivery_evidence_poll_timeout_ms, old_timeout)
+      restore_app_env(:delivery_evidence_poll_interval_ms, old_interval)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "finalize_issue_with_report returns auditable checker telemetry and comments required checks" do
     test_root =
       Path.join(

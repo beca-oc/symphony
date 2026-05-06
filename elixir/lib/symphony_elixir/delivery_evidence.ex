@@ -192,7 +192,15 @@ defmodule SymphonyElixir.DeliveryEvidence do
   defp pending_failure?(_failure), do: false
 
   defp poll_timeout_ms do
-    Application.get_env(:symphony_elixir, :delivery_evidence_poll_timeout_ms, 60_000)
+    settings = Config.settings!()
+
+    case settings.evidence_gate.timeout_seconds do
+      seconds when is_integer(seconds) and seconds > 0 ->
+        seconds * 1_000
+
+      _ ->
+        Application.get_env(:symphony_elixir, :delivery_evidence_poll_timeout_ms, 60_000)
+    end
   end
 
   defp poll_interval_ms do
