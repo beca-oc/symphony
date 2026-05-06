@@ -774,9 +774,48 @@ defmodule SymphonyElixir.Orchestrator do
       not clean_git_workspace?(workspace) ->
         :no_resume
 
+      not delivery_commit_ahead_of_default_branch?(workspace) ->
+        :no_resume
+
       true ->
         :ok
     end
+  end
+
+  defp delivery_commit_ahead_of_default_branch?(workspace) do
+    default_branch = Config.settings!().repo.default_branch || "main"
+
+    cond do
+      git_ref_exists?(workspace, "origin/#{default_branch}") ->
+        git_ahead_count(workspace, "origin/#{default_branch}") > 0
+
+      git_ref_exists?(workspace, default_branch) ->
+        git_ahead_count(workspace, default_branch) > 0
+
+      true ->
+        true
+    end
+  end
+
+  defp git_ref_exists?(workspace, ref) do
+    case System.cmd("git", ["-C", workspace, "rev-parse", "--verify", "--quiet", ref], stderr_to_stdout: true) do
+      {_output, 0} -> true
+      _ -> false
+    end
+  end
+
+  defp git_ahead_count(workspace, base_ref) do
+    case System.cmd("git", ["-C", workspace, "rev-list", "--count", "#{base_ref}..HEAD"], stderr_to_stdout: true) do
+      {output, 0} ->
+        output
+        |> String.trim()
+        |> String.to_integer()
+
+      _ ->
+        0
+    end
+  rescue
+    ArgumentError -> 0
   end
 
   defp publish_and_finalize_existing_delivery(%State{} = state, %Issue{} = issue, workspace, running_entry) do
