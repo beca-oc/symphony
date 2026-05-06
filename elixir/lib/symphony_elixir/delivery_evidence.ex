@@ -300,10 +300,13 @@ defmodule SymphonyElixir.DeliveryEvidence do
   defp git_value(_workspace, _args), do: nil
 
   defp find_workpad(comments) when is_list(comments) do
-    Enum.find(comments, fn
-      body when is_binary(body) -> String.contains?(body, @workpad_heading)
-      _ -> false
-    end)
+    workpads =
+      Enum.filter(comments, fn
+        body when is_binary(body) -> String.contains?(body, @workpad_heading)
+        _ -> false
+      end)
+
+    Enum.find(workpads, &Regex.match?(@validation_result_pattern, &1)) || List.first(workpads)
   end
 
   defp find_workpad(_comments), do: nil

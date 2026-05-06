@@ -321,7 +321,7 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     end
   end
 
-  test "publisher does not duplicate an existing Codex workpad on resume" do
+  test "publisher appends final Codex workpad when setup workpad already exists" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -364,7 +364,10 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
         System.put_env("GH_VIEW_REQUIRED_GATE", "1")
 
         assert {:ok, _evidence} = DeliveryPublisher.publish(issue, workspace)
-        refute_receive {:memory_tracker_comment, "issue-publish", _body}, 100
+        assert_receive {:memory_tracker_comment, "issue-publish", body}, 500
+        assert body =~ "## Codex Workpad"
+        assert body =~ "Validation: `printf 'fast validation passed"
+        assert body =~ "fast validation passed"
       end)
     after
       System.delete_env("GH_VIEW_REQUIRED_GATE")

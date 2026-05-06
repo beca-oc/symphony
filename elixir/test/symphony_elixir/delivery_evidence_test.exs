@@ -207,6 +207,75 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
     end
   end
 
+  test "evidence evaluator prefers final workpad with passing validation over stale setup workpad" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-evidence-final-workpad-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {workspace, sha} = committed_workspace!(test_root, "codex/BEC-47-marker")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        repo_github_repo: "Subconscious-ai/example",
+        validation_deploy_evidence: "github_checks",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"]
+      )
+
+      issue = %Issue{
+        id: "issue-final-workpad",
+        identifier: "BEC-47",
+        title: "Final workpad gate",
+        state: "In Progress"
+      }
+
+      setup_workpad = """
+      ## Codex Workpad
+
+      Validation result: failing by design before repair.
+      PR: https://github.com/Subconscious-ai/example/pull/47
+      """
+
+      final_workpad = """
+      ## Codex Workpad
+
+      Validation: bash scripts/agent/validate-fast.sh passed
+      PR: https://github.com/Subconscious-ai/example/pull/47
+      Check: https://github.com/Subconscious-ai/example/actions/runs/47/job/1
+      """
+
+      pull_request = %{
+        "url" => "https://github.com/Subconscious-ai/example/pull/47",
+        "isDraft" => true,
+        "headRefOid" => sha,
+        "title" => "BEC-47 final workpad gate",
+        "body" => "Refs BEC-47",
+        "labels" => [%{"name" => "symphony"}],
+        "statusCheckRollup" => [
+          %{
+            "__typename" => "CheckRun",
+            "name" => "symphony-gate",
+            "status" => "COMPLETED",
+            "conclusion" => "SUCCESS",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/47/job/1"
+          }
+        ]
+      }
+
+      assert {:ok, evidence} =
+               DeliveryEvidence.evaluate(issue, workspace,
+                 comments: [setup_workpad, final_workpad],
+                 pull_request: pull_request
+               )
+
+      assert evidence.workpad == final_workpad
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evidence evaluator only requires configured PR checks when present" do
     test_root =
       Path.join(
