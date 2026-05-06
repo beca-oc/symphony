@@ -733,6 +733,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp resume_existing_delivery(%State{} = state, %Issue{} = issue, nil) do
     with true <- DeliveryEvidence.required?(),
+         :ok <- not_rework_resume?(issue),
          :ok <- not_already_evidenced?(issue),
          {:ok, workspace} <- Workspace.path_for_issue(issue, nil),
          true <- File.dir?(workspace),
@@ -760,6 +761,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp resume_existing_delivery(_state, _issue, _worker_host), do: :no_resume
+
+  defp not_rework_resume?(%Issue{state: state}) when is_binary(state) do
+    if String.downcase(state) == "rework", do: :no_resume, else: :ok
+  end
+
+  defp not_rework_resume?(_issue), do: :ok
 
   defp not_already_evidenced?(%Issue{id: issue_id}) when is_binary(issue_id) do
     case Tracker.fetch_comments(issue_id) do
