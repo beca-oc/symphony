@@ -797,6 +797,61 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "restart resume does not publish committed Rework workspaces" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-restart-rework-#{System.unique_integer([:positive])}")
+    workspace_root = Path.join(test_root, "workspaces")
+    workspace = Path.join(workspace_root, "BEC-203")
+    remote = Path.join(test_root, "origin.git")
+
+    try do
+      File.mkdir_p!(workspace)
+      File.mkdir_p!(workspace_root)
+      System.cmd("git", ["init", "--bare", remote])
+      System.cmd("git", ["-C", workspace, "init", "-b", "main"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(workspace, "README.md"), "# restart rework\n")
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "base commit"])
+      System.cmd("git", ["-C", workspace, "remote", "add", "origin", remote])
+      System.cmd("git", ["-C", workspace, "push", "-u", "origin", "main"])
+      System.cmd("git", ["-C", workspace, "switch", "-c", "codex/BEC-203-rework-repair"])
+      File.write!(Path.join(workspace, "README.md"), "# restart rework\n\nrepair needed\n")
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "failing delivery commit"])
+
+      issue = %Issue{
+        id: "issue-restart-rework",
+        identifier: "BEC-203",
+        title: "Repair failed delivery",
+        state: "Rework",
+        url: "https://linear.app/example/issue/BEC-203/rework-repair"
+      }
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        repo_github_repo: "Subconscious-ai/example",
+        repo_default_branch: "main",
+        validation_fast: "printf 'fast validation passed\\n'",
+        validation_deploy_evidence: "none",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"]
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      state = Orchestrator.resume_existing_delivery_for_test(%Orchestrator.State{}, issue)
+
+      refute MapSet.member?(state.completed, "issue-restart-rework")
+      refute MapSet.member?(state.claimed, "issue-restart-rework")
+      refute_receive {:memory_tracker_comment, "issue-restart-rework", _body}, 100
+      refute_receive {:memory_tracker_state_update, "issue-restart-rework", _state}, 100
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "codex token updates stop a running issue that exceeds max_total_tokens" do
     write_workflow_file!(Workflow.workflow_file_path(), max_total_tokens: 10)
 
