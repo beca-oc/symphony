@@ -1347,6 +1347,7 @@ defmodule SymphonyElixir.CoreTest do
     Application.put_env(:symphony_elixir, :memory_tracker_comments, %{
       "issue-repair-context" => [
         "## Codex Workpad\n\nLocal progress that should not be injected.",
+        "## Codex Workpad\n\nBranch: `codex/S-2-repair`\nDraft PR: https://github.example/repo/pull/2\nValidation: blocked before complete publication",
         "## Symphony Harness Blocker\n\nResult: failed\nFailure bucket: ci_failed\n- unit-tests: failed (https://github.example/check)",
         "## Symphony Evidence Gate\n\nResult: passed\nThis successful historical comment should not be repair context."
       ]
@@ -1356,6 +1357,8 @@ defmodule SymphonyElixir.CoreTest do
 
     assert prompt =~ "Failure bucket: ci_failed"
     assert prompt =~ "https://github.example/check"
+    assert prompt =~ "codex/S-2-repair"
+    assert prompt =~ "https://github.example/repo/pull/2"
     refute prompt =~ "Local progress that should not be injected"
     refute prompt =~ "This successful historical comment"
   after

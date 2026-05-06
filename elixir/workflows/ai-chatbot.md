@@ -78,7 +78,7 @@ Worker contract:
 2. Work only in the provided repository copy.
 3. Do not call Linear tools, GitHub tools, `gh`, or `git push`.
 4. Do not create or update a Linear workpad comment.
-5. Create a local branch named `codex/{{ issue.identifier }}-<short-slug>`.
+5. If this is `Rework` and the harness context names an existing `codex/{{ issue.identifier }}-...` branch, continue that branch; otherwise create a local branch named `codex/{{ issue.identifier }}-<short-slug>`.
 6. Sync from `origin/main` before edits.
 7. Implement the smallest scoped change that satisfies the ticket; avoid unrelated refactors.
 8. Commit the local change with a clear message.
