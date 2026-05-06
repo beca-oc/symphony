@@ -16,9 +16,15 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
   const text = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
   check(text, relPath, `repo:\n  name: ${name}`, "repo name");
   check(text, relPath, `github_repo: ${githubRepo}`, "GitHub repo");
-  check(text, relPath, "preflight: bash scripts/agent/preflight.sh", "preflight command");
-  check(text, relPath, "fast: bash scripts/agent/validate-fast.sh", "fast validation command");
-  check(text, relPath, "full: bash scripts/agent/validate-full.sh", "full validation command");
+  if (name === "market-ontology") {
+    check(text, relPath, "preflight: PYTHON=.venv/bin/python bash scripts/agent/preflight.sh", "preflight command");
+    check(text, relPath, "fast: PYTHON=.venv/bin/python bash scripts/agent/validate-fast.sh", "fast validation command");
+    check(text, relPath, "full: PYTHON=.venv/bin/python bash scripts/agent/validate-full.sh", "full validation command");
+  } else {
+    check(text, relPath, "preflight: bash scripts/agent/preflight.sh", "preflight command");
+    check(text, relPath, "fast: bash scripts/agent/validate-fast.sh", "fast validation command");
+    check(text, relPath, "full: bash scripts/agent/validate-full.sh", "full validation command");
+  }
   check(text, relPath, `deploy_evidence: ${deployEvidence}`, "deploy evidence mode");
   check(text, relPath, "evidence_required: true", "evidence gate enabled");
   check(text, relPath, 'github_required_checks: ["symphony-gate"]', "required symphony-gate check");
@@ -30,6 +36,10 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
   check(text, relPath, "features.multi_agent=false", "worker subagents disabled");
   check(text, relPath, "Do not call Linear tools, GitHub tools, `gh`, or `git push`.", "Symphony-owned publishing rule");
   check(text, relPath, "Symphony will run validation, push the branch, create the draft PR", "Symphony-owned evidence rule");
+  if (name === "market-ontology") {
+    check(text, relPath, "python3 -m venv .venv", "market-ontology virtualenv setup");
+    check(text, relPath, '.venv/bin/python -m pip install -e ".[dev]"', "market-ontology dev dependency setup");
+  }
   console.log(`${name.padEnd(16)} -> port ${port} -> ${relPath}`);
 }
 
