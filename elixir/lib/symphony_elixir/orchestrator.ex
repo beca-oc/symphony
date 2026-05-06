@@ -733,6 +733,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp resume_existing_delivery(%State{} = state, %Issue{} = issue, nil) do
     with true <- DeliveryEvidence.required?(),
+         :ok <- not_already_evidenced?(issue),
          {:ok, workspace} <- Workspace.path_for_issue(issue, nil),
          true <- File.dir?(workspace),
          :ok <- committed_resume_workspace?(issue, workspace) do
@@ -759,6 +760,25 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp resume_existing_delivery(_state, _issue, _worker_host), do: :no_resume
+
+  defp not_already_evidenced?(%Issue{id: issue_id}) when is_binary(issue_id) do
+    case Tracker.fetch_comments(issue_id) do
+      {:ok, comments} ->
+        if Enum.any?(comments, &successful_evidence_gate_comment?/1), do: :no_resume, else: :ok
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  defp not_already_evidenced?(_issue), do: :ok
+
+  defp successful_evidence_gate_comment?(body) when is_binary(body) do
+    String.contains?(body, "## Symphony Evidence Gate") and
+      Regex.match?(~r/result:\s*passed/i, body)
+  end
+
+  defp successful_evidence_gate_comment?(_body), do: false
 
   defp committed_resume_workspace?(%Issue{} = issue, workspace) when is_binary(workspace) do
     branch = git_value(workspace, ["rev-parse", "--abbrev-ref", "HEAD"])

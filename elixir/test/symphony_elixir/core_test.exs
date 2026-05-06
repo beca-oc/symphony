@@ -734,6 +734,69 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "restart resume ignores issue that already has successful evidence gate" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-restart-evidenced-#{System.unique_integer([:positive])}")
+    workspace_root = Path.join(test_root, "workspaces")
+    workspace = Path.join(workspace_root, "BEC-202")
+    remote = Path.join(test_root, "origin.git")
+
+    try do
+      File.mkdir_p!(workspace)
+      File.mkdir_p!(workspace_root)
+      System.cmd("git", ["init", "--bare", remote])
+      System.cmd("git", ["-C", workspace, "init", "-b", "main"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      File.write!(Path.join(workspace, "README.md"), "# restart evidenced\n")
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "base commit"])
+      System.cmd("git", ["-C", workspace, "remote", "add", "origin", remote])
+      System.cmd("git", ["-C", workspace, "push", "-u", "origin", "main"])
+      System.cmd("git", ["-C", workspace, "switch", "-c", "codex/BEC-202-restart-evidenced"])
+      File.write!(Path.join(workspace, "README.md"), "# restart evidenced\n\nproof\n")
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "delivery commit"])
+
+      issue = %Issue{
+        id: "issue-restart-evidenced",
+        identifier: "BEC-202",
+        title: "Restart already evidenced delivery",
+        state: "Human Review",
+        url: "https://linear.app/example/issue/BEC-202/restart-evidenced"
+      }
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        repo_github_repo: "Subconscious-ai/example",
+        repo_default_branch: "main",
+        validation_fast: "printf 'fast validation passed\\n'",
+        validation_deploy_evidence: "none",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"]
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Application.put_env(:symphony_elixir, :memory_tracker_comments, %{
+        "issue-restart-evidenced" => [
+          "## Codex Workpad\n\nDraft PR: https://github.com/Subconscious-ai/example/pull/202",
+          "## Symphony Evidence Gate\n\nResult: passed"
+        ]
+      })
+
+      state = Orchestrator.resume_existing_delivery_for_test(%Orchestrator.State{}, issue)
+
+      refute MapSet.member?(state.completed, "issue-restart-evidenced")
+      refute MapSet.member?(state.claimed, "issue-restart-evidenced")
+      refute_receive {:memory_tracker_comment, "issue-restart-evidenced", _body}, 100
+      refute_receive {:memory_tracker_state_update, "issue-restart-evidenced", _state}, 100
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_comments)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "codex token updates stop a running issue that exceeds max_total_tokens" do
     write_workflow_file!(Workflow.workflow_file_path(), max_total_tokens: 10)
 
