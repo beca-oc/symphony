@@ -35,6 +35,7 @@ validation:
   evidence_required: true
 evidence_gate:
   github_required_checks: ["symphony-gate"]
+  require_all_checks: true
   timeout_seconds: 1800
 agent:
   max_concurrent_agents: 1

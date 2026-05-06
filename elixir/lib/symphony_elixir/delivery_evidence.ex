@@ -422,29 +422,39 @@ defmodule SymphonyElixir.DeliveryEvidence do
     name = check_name(check)
 
     cond do
-      configured_required_checks?(gate) and not check_configured?(name, gate.github_required_checks) ->
-        failures
-
       check_configured?(name, gate.github_optional_checks) ->
         failures
 
       check_state(check) == :skipped and check_configured?(name, gate.allow_skipped_checks) ->
         failures
 
+      require_all_checks?(gate) ->
+        require_check_state(check, name, failures)
+
+      configured_required_checks?(gate) and not check_configured?(name, gate.github_required_checks) ->
+        failures
+
       true ->
-        case check_state(check) do
-          :success -> failures
-          :pending -> ["required PR check still pending: #{name}" | failures]
-          :skipped -> ["required PR check skipped: #{name}" | failures]
-          :failed -> ["required PR check failed: #{name}" | failures]
-        end
+        require_check_state(check, name, failures)
     end
   end
 
   defp require_pr_check(_check, failures, _gate), do: failures
 
+  defp require_check_state(check, name, failures) do
+    case check_state(check) do
+      :success -> failures
+      :pending -> ["required PR check still pending: #{name}" | failures]
+      :skipped -> ["required PR check skipped: #{name}" | failures]
+      :failed -> ["required PR check failed: #{name}" | failures]
+    end
+  end
+
   defp configured_required_checks?(%{github_required_checks: checks}) when is_list(checks), do: checks != []
   defp configured_required_checks?(_gate), do: false
+
+  defp require_all_checks?(%{require_all_checks: true}), do: true
+  defp require_all_checks?(_gate), do: false
 
   defp require_configured_checks(failures, checks, gate) do
     present_names = Enum.map(checks, &check_name/1)

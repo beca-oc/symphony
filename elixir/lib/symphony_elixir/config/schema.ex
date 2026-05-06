@@ -290,13 +290,14 @@ defmodule SymphonyElixir.Config.Schema do
       field(:github_required_checks, {:array, :string}, default: [])
       field(:github_optional_checks, {:array, :string}, default: [])
       field(:allow_skipped_checks, {:array, :string}, default: [])
+      field(:require_all_checks, :boolean, default: false)
       field(:timeout_seconds, :integer)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:github_required_checks, :github_optional_checks, :allow_skipped_checks, :timeout_seconds], empty_values: [])
+      |> cast(attrs, [:github_required_checks, :github_optional_checks, :allow_skipped_checks, :require_all_checks, :timeout_seconds], empty_values: [])
       |> update_change(:github_required_checks, &normalize_string_list/1)
       |> update_change(:github_optional_checks, &normalize_string_list/1)
       |> update_change(:allow_skipped_checks, &normalize_string_list/1)

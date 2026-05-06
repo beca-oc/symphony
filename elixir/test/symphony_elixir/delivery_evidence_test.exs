@@ -276,6 +276,126 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
     end
   end
 
+  test "evidence evaluator requires every non-optional check when configured" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-evidence-all-checks-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {workspace, sha} = committed_workspace!(test_root, "codex/BEC-54-marker")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        repo_github_repo: "Subconscious-ai/example",
+        validation_deploy_evidence: "github_checks",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"],
+        evidence_gate_github_optional_checks: ["CodeRabbit"],
+        evidence_gate_require_all_checks: true
+      )
+
+      issue = %Issue{
+        id: "issue-all-checks",
+        identifier: "BEC-54",
+        title: "All checks gate",
+        state: "In Progress"
+      }
+
+      workpad = """
+      ## Codex Workpad
+
+      Validation: bash scripts/agent/validate-fast.sh passed
+      PR: https://github.com/Subconscious-ai/example/pull/54
+      Check: https://github.com/Subconscious-ai/example/actions/runs/54/job/1
+      """
+
+      base_pr = %{
+        "url" => "https://github.com/Subconscious-ai/example/pull/54",
+        "isDraft" => true,
+        "headRefOid" => sha,
+        "title" => "BEC-54 all checks gate",
+        "body" => "Refs BEC-54",
+        "labels" => [%{"name" => "symphony"}]
+      }
+
+      pending_codeql =
+        Map.put(base_pr, "statusCheckRollup", [
+          %{
+            "__typename" => "CheckRun",
+            "name" => "symphony-gate",
+            "status" => "COMPLETED",
+            "conclusion" => "SUCCESS",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/54/job/1"
+          },
+          %{
+            "__typename" => "CheckRun",
+            "name" => "Analyze (python)",
+            "status" => "IN_PROGRESS",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/54/job/2"
+          },
+          %{
+            "__typename" => "StatusContext",
+            "context" => "CodeRabbit",
+            "state" => "PENDING"
+          }
+        ])
+
+      assert {:error, pending_report} =
+               DeliveryEvidence.evaluate(issue, workspace,
+                 comments: [workpad],
+                 pull_request: pending_codeql
+               )
+
+      assert "required PR check still pending: Analyze (python)" in pending_report.failures
+      refute Enum.any?(pending_report.failures, &String.contains?(&1, "CodeRabbit"))
+
+      failed_codeql =
+        put_in(
+          pending_codeql,
+          ["statusCheckRollup", Access.at(1)],
+          %{
+            "__typename" => "CheckRun",
+            "name" => "Analyze (python)",
+            "status" => "COMPLETED",
+            "conclusion" => "FAILURE",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/54/job/2"
+          }
+        )
+
+      assert {:error, failed_report} =
+               DeliveryEvidence.evaluate(issue, workspace,
+                 comments: [workpad],
+                 pull_request: failed_codeql
+               )
+
+      assert "required PR check failed: Analyze (python)" in failed_report.failures
+
+      complete_pr =
+        put_in(
+          pending_codeql,
+          ["statusCheckRollup", Access.at(1)],
+          %{
+            "__typename" => "CheckRun",
+            "name" => "Analyze (python)",
+            "status" => "COMPLETED",
+            "conclusion" => "SUCCESS",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/54/job/2"
+          }
+        )
+
+      assert {:ok, evidence} =
+               DeliveryEvidence.evaluate(issue, workspace,
+                 comments: [workpad],
+                 pull_request: complete_pr
+               )
+
+      assert evidence.deployment_url == "https://github.com/Subconscious-ai/example/actions/runs/54/job/1"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evidence evaluator does not treat Linear issue URLs as check evidence" do
     test_root =
       Path.join(

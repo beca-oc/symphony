@@ -1022,6 +1022,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       evidence_gate_github_required_checks: ["Run static checks", "CodeQL"],
       evidence_gate_github_optional_checks: ["CodeRabbit"],
       evidence_gate_allow_skipped_checks: ["Run Storybook"],
+      evidence_gate_require_all_checks: true,
       evidence_gate_timeout_seconds: 1800
     )
 
@@ -1038,6 +1039,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.evidence_gate.github_required_checks == ["Run static checks", "CodeQL"]
     assert config.evidence_gate.github_optional_checks == ["CodeRabbit"]
     assert config.evidence_gate.allow_skipped_checks == ["Run Storybook"]
+    assert config.evidence_gate.require_all_checks == true
     assert config.evidence_gate.timeout_seconds == 1800
 
     write_workflow_file!(Workflow.workflow_file_path(), validation_deploy_evidence: "ftp")
