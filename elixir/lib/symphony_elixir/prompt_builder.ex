@@ -56,8 +56,8 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp harness_repair_comment?(body) when is_binary(body) do
     String.contains?(body, "## Symphony Harness Blocker") or
-      (String.contains?(body, "## Symphony Evidence Gate") and
-         String.match?(body, ~r/result:\s*failed/i))
+      (String.contains?(body, "## Codex Workpad") and String.match?(body, ~r/(Branch|Draft PR|PR):/i)) or
+      (String.contains?(body, "## Symphony Evidence Gate") and String.match?(body, ~r/result:\s*failed/i))
   end
 
   defp harness_repair_comment?(_body), do: false
