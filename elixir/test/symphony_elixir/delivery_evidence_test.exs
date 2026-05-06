@@ -396,6 +396,71 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
     end
   end
 
+  test "evidence evaluator blocks merge-conflicting pull requests" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-evidence-merge-conflict-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {workspace, sha} = committed_workspace!(test_root, "codex/BEC-55-marker")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        repo_github_repo: "Subconscious-ai/example",
+        validation_deploy_evidence: "github_checks",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"],
+        evidence_gate_require_all_checks: true
+      )
+
+      issue = %Issue{
+        id: "issue-merge-conflict",
+        identifier: "BEC-55",
+        title: "Merge conflict gate",
+        state: "In Progress"
+      }
+
+      workpad = """
+      ## Codex Workpad
+
+      Validation: bash scripts/agent/validate-fast.sh passed
+      PR: https://github.com/Subconscious-ai/example/pull/55
+      Check: https://github.com/Subconscious-ai/example/actions/runs/55/job/1
+      """
+
+      pull_request = %{
+        "url" => "https://github.com/Subconscious-ai/example/pull/55",
+        "isDraft" => true,
+        "headRefOid" => sha,
+        "title" => "BEC-55 merge conflict gate",
+        "body" => "Refs BEC-55",
+        "mergeable" => "CONFLICTING",
+        "labels" => [%{"name" => "symphony"}],
+        "statusCheckRollup" => [
+          %{
+            "__typename" => "CheckRun",
+            "name" => "symphony-gate",
+            "status" => "COMPLETED",
+            "conclusion" => "SUCCESS",
+            "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/55/job/1"
+          }
+        ]
+      }
+
+      assert {:error, report} =
+               DeliveryEvidence.evaluate(issue, workspace,
+                 comments: [workpad],
+                 pull_request: pull_request
+               )
+
+      assert "pull request has merge conflicts" in report.failures
+      assert DeliveryEvidence.failure_bucket({:evidence_gate_failed, report.failures}) == :merge_conflict
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evidence evaluator does not treat Linear issue URLs as check evidence" do
     test_root =
       Path.join(
@@ -702,6 +767,7 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
       {["pull request is missing symphony label"], :missing_label},
       {["missing validation command/result evidence"], :missing_validation},
       {["missing deployment/check evidence"], :missing_deploy_evidence},
+      {["pull request has merge conflicts"], :merge_conflict},
       {["required PR check failed: symphony-gate"], :ci_failed},
       {["required PR check still pending: symphony-gate"], :ci_pending},
       {["pull request head commit does not match workspace HEAD"], :pushed_sha_mismatch}
