@@ -1265,6 +1265,65 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "attempt=3"
   end
 
+  test "prompt builder exposes bounded harness blocker context for repair attempts" do
+    workflow_prompt = """
+    Ticket {{ issue.identifier }}
+
+    Harness context:
+    {% if issue.recent_harness_context %}
+    {{ issue.recent_harness_context }}
+    {% else %}
+    none
+    {% endif %}
+    """
+
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", prompt: workflow_prompt)
+
+    issue = %Issue{
+      id: "issue-repair-context",
+      identifier: "S-2",
+      title: "Repair failed CI",
+      description: "Fix the failing gate",
+      state: "Rework",
+      url: "https://example.org/issues/S-2",
+      labels: []
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_comments, %{
+      "issue-repair-context" => [
+        "## Codex Workpad\n\nLocal progress that should not be injected.",
+        "## Symphony Harness Blocker\n\nResult: failed\nFailure bucket: ci_failed\n- unit-tests: failed (https://github.example/check)",
+        "## Symphony Evidence Gate\n\nResult: passed\nThis successful historical comment should not be repair context."
+      ]
+    })
+
+    prompt = PromptBuilder.build_prompt(issue, attempt: 2)
+
+    assert prompt =~ "Failure bucket: ci_failed"
+    assert prompt =~ "https://github.example/check"
+    refute prompt =~ "Local progress that should not be injected"
+    refute prompt =~ "This successful historical comment"
+  after
+    Application.delete_env(:symphony_elixir, :memory_tracker_comments)
+  end
+
+  test "prompt builder leaves harness repair context empty when no repair comments exist" do
+    workflow_prompt = "Ticket {{ issue.identifier }} context={% if issue.recent_harness_context %}{{ issue.recent_harness_context }}{% else %}none{% endif %}"
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", prompt: workflow_prompt)
+
+    issue = %Issue{
+      id: "issue-repair-context-missing",
+      identifier: "S-3",
+      title: "Repair without comments",
+      description: "Fetch comments unavailable",
+      state: "Rework",
+      url: "https://example.org/issues/S-3",
+      labels: []
+    }
+
+    assert PromptBuilder.build_prompt(issue) == "Ticket S-3 context=none"
+  end
+
   test "prompt builder renders issue datetime fields without crashing" do
     workflow_prompt = "Ticket {{ issue.identifier }} created={{ issue.created_at }} updated={{ issue.updated_at }}"
 

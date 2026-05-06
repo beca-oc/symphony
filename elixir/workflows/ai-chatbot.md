@@ -67,6 +67,11 @@ Description:
 No description provided.
 {% endif %}
 
+{% if issue.recent_harness_context %}
+Recent Symphony harness blocker context:
+{{ issue.recent_harness_context }}
+{% endif %}
+
 Worker contract:
 
 1. This is an unattended Symphony worker. Never ask a human to perform follow-up actions.

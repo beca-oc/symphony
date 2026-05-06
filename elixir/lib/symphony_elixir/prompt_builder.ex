@@ -3,9 +3,11 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.{Config, Tracker, Workflow}
 
   @render_opts [strict_variables: true, strict_filters: true]
+  @max_harness_comments 3
+  @max_harness_comment_chars 4_000
 
   @spec build_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
@@ -18,12 +20,51 @@ defmodule SymphonyElixir.PromptBuilder do
     |> Solid.render!(
       %{
         "attempt" => Keyword.get(opts, :attempt),
-        "issue" => issue |> Map.from_struct() |> to_solid_map()
+        "issue" => issue |> issue_context() |> to_solid_map()
       },
       @render_opts
     )
     |> IO.iodata_to_binary()
   end
+
+  defp issue_context(issue) do
+    issue
+    |> Map.from_struct()
+    |> Map.put(:recent_harness_context, recent_harness_context(issue))
+  end
+
+  defp recent_harness_context(%{id: issue_id}) when is_binary(issue_id) do
+    case Tracker.fetch_comments(issue_id) do
+      {:ok, comments} ->
+        comments
+        |> Enum.filter(&harness_repair_comment?/1)
+        |> Enum.take(-@max_harness_comments)
+        |> Enum.map(&truncate_comment/1)
+        |> Enum.join("\n\n---\n\n")
+        |> nil_if_blank()
+
+      {:error, _reason} ->
+        nil
+    end
+  end
+
+  defp recent_harness_context(_issue), do: nil
+
+  defp nil_if_blank(value) when is_binary(value) do
+    if String.trim(value) == "", do: nil, else: value
+  end
+
+  defp harness_repair_comment?(body) when is_binary(body) do
+    String.contains?(body, "## Symphony Harness Blocker") or
+      (String.contains?(body, "## Symphony Evidence Gate") and
+         String.match?(body, ~r/result:\s*failed/i))
+  end
+
+  defp harness_repair_comment?(_body), do: false
+
+  defp truncate_comment(body) when byte_size(body) <= @max_harness_comment_chars, do: body
+
+  defp truncate_comment(body), do: String.slice(body, 0, @max_harness_comment_chars) <> "\n[truncated]"
 
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
 
