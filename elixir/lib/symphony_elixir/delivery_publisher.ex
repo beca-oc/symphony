@@ -246,7 +246,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
              "--repo",
              repo,
              "--json",
-             "url,isDraft,headRefOid,title,body,labels,statusCheckRollup"
+             "url,isDraft,headRefOid,title,body,labels,statusCheckRollup,mergeable"
            ],
            stderr_to_stdout: true
          ) do

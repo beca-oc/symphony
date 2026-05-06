@@ -65,6 +65,7 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
         assert log =~ "gh api --method POST repos/Subconscious-ai/example/issues/99/labels"
         assert log =~ "labels[]=symphony"
         assert log =~ "gh pr view https://github.com/Subconscious-ai/example/pull/99"
+        assert log =~ "statusCheckRollup,mergeable"
         assert log =~ "--json"
       end)
     after

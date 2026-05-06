@@ -85,6 +85,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
       String.contains?(text, "missing symphony label") -> :missing_label
       String.contains?(text, "missing validation") -> :missing_validation
       String.contains?(text, "missing deployment/check evidence") -> :missing_deploy_evidence
+      String.contains?(text, "merge conflicts") -> :merge_conflict
       String.contains?(text, "check failed") -> :ci_failed
       String.contains?(text, "check skipped") -> :ci_failed
       String.contains?(text, "check still pending") -> :ci_pending
@@ -267,7 +268,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
                "--state",
                "open",
                "--json",
-               "url,isDraft,headRefOid,title,body,labels,statusCheckRollup"
+               "url,isDraft,headRefOid,title,body,labels,statusCheckRollup,mergeable"
              ],
              stderr_to_stdout: true
            ),
@@ -330,6 +331,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
     |> require_draft_pr(pull_request)
     |> require_symphony_label(pull_request)
     |> require_pr_commit(pull_request, commit_sha)
+    |> require_mergeable_pr(pull_request)
     |> maybe_require_pr_reference(issue, pull_request)
   end
 
@@ -358,6 +360,16 @@ defmodule SymphonyElixir.DeliveryEvidence do
       ^commit_sha -> failures
       nil -> failures
       _ -> ["pull request head commit does not match workspace HEAD" | failures]
+    end
+  end
+
+  defp require_mergeable_pr(failures, pull_request) do
+    case map_get(pull_request, :mergeable) do
+      value when value in ["CONFLICTING", :CONFLICTING, "conflicting", :conflicting] ->
+        ["pull request has merge conflicts" | failures]
+
+      _ ->
+        failures
     end
   end
 
