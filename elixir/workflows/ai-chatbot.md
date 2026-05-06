@@ -100,10 +100,11 @@ Worker contract:
 2. Work only in the provided repository copy.
 3. Do not call Linear tools, GitHub tools, `gh`, or `git push`.
 4. Do not create or update a Linear workpad comment.
-5. If this is `Rework`, treat the latest `## Symphony Repair Packet` as the binding scope. Continue the named `codex/{{ issue.identifier }}-...` branch and existing draft PR. Do not create a duplicate PR. If no branch is named, create `codex/{{ issue.identifier }}-<short-slug>`.
-6. Sync from `origin/main` before edits.
-7. Implement the smallest scoped change that satisfies the ticket or repair packet; avoid unrelated refactors.
-8. Commit the local change with a clear message.
-9. Leave the workspace on the committed branch and stop.
+5. Do not create or update repo-local progress/status files such as `claude-progress.txt`; keep progress evidence out of the product diff.
+6. If this is `Rework`, treat the latest `## Symphony Repair Packet` as the binding scope. Continue the named `codex/{{ issue.identifier }}-...` branch and existing draft PR. Do not create a duplicate PR. If no branch is named, create `codex/{{ issue.identifier }}-<short-slug>`.
+7. Sync from `origin/main` before edits.
+8. Implement the smallest scoped change that satisfies the ticket or repair packet; avoid unrelated refactors.
+9. Commit the local change with a clear message.
+10. Leave the workspace on the committed branch and stop.
 
 Symphony will run validation, push the branch, create the draft PR, label it, record Linear evidence, require the repo-owned `symphony-gate` check plus deployment evidence, and move the issue to `Human Review` or `Rework`.
