@@ -99,9 +99,55 @@ defmodule SymphonyElixir.DeliveryPublisher do
   defp validation_command(_settings), do: nil
 
   defp git_push(workspace, branch) do
+    case git_push_once(workspace, branch) do
+      :ok ->
+        :ok
+
+      {:error, {:git_push_failed, _status, output}} = error ->
+        if non_fast_forward_push?(output) do
+          reconcile_remote_branch_and_push(workspace, branch)
+        else
+          error
+        end
+    end
+  end
+
+  defp git_push_once(workspace, branch) do
     case System.cmd("git", ["-C", workspace, "push", "-u", "origin", branch], stderr_to_stdout: true) do
       {_output, 0} -> :ok
       {output, status} -> {:error, {:git_push_failed, status, truncate_output(output)}}
+    end
+  end
+
+  defp non_fast_forward_push?(output) when is_binary(output) do
+    String.contains?(output, "non-fast-forward") or
+      String.contains?(output, "fetch first") or
+      String.contains?(output, "tip of your current branch is behind")
+  end
+
+  defp non_fast_forward_push?(_output), do: false
+
+  defp reconcile_remote_branch_and_push(workspace, branch) do
+    with :ok <- git_fetch_branch(workspace, branch),
+         :ok <- git_rebase_branch(workspace, branch) do
+      git_push_once(workspace, branch)
+    end
+  end
+
+  defp git_fetch_branch(workspace, branch) do
+    case System.cmd("git", ["-C", workspace, "fetch", "origin", branch], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {output, status} -> {:error, {:git_fetch_failed, status, truncate_output(output)}}
+    end
+  end
+
+  defp git_rebase_branch(workspace, branch) do
+    case System.cmd("git", ["-C", workspace, "rebase", "origin/#{branch}"], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+
+      {output, status} ->
+        System.cmd("git", ["-C", workspace, "rebase", "--abort"], stderr_to_stdout: true)
+        {:error, {:git_rebase_failed, status, truncate_output(output)}}
     end
   end
 
