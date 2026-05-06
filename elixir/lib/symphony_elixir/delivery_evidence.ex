@@ -175,10 +175,17 @@ defmodule SymphonyElixir.DeliveryEvidence do
   end
 
   defp pending_report?(%{failures: failures}) when is_list(failures) do
-    failure_bucket(failures) in [:ci_pending, :missing_deploy_evidence]
+    Enum.any?(failures, &pending_failure?/1) or failure_bucket(failures) == :missing_deploy_evidence
   end
 
   defp pending_report?(_report), do: false
+
+  defp pending_failure?(failure) when is_binary(failure) do
+    failure = String.downcase(failure)
+    String.contains?(failure, "check still pending") or String.contains?(failure, "missing required pr check")
+  end
+
+  defp pending_failure?(_failure), do: false
 
   defp poll_timeout_ms do
     Application.get_env(:symphony_elixir, :delivery_evidence_poll_timeout_ms, 60_000)

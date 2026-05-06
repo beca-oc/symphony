@@ -856,7 +856,8 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
         tracker_kind: "memory",
         validation_deploy_evidence: "github_checks",
         validation_evidence_required: true,
-        evidence_gate_github_required_checks: ["symphony-gate"]
+        evidence_gate_github_required_checks: ["symphony-gate"],
+        evidence_gate_require_all_checks: true
       )
 
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
@@ -890,9 +891,9 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
       pull_request_fetcher = fn ->
         count = Agent.get_and_update(counter, &{&1 + 1, &1 + 1})
 
-        status =
+        symphony_gate_status =
           if count == 1 do
-            %{"status" => "IN_PROGRESS"}
+            %{"status" => "COMPLETED", "conclusion" => "SUCCESS"}
           else
             %{"status" => "COMPLETED", "conclusion" => "SUCCESS"}
           end
@@ -904,7 +905,26 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
               "name" => "symphony-gate",
               "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/51/job/1"
             },
-            status
+            symphony_gate_status
+          ),
+          if(count == 1,
+            do: %{
+              "__typename" => "CheckRun",
+              "name" => "Analyze (python)",
+              "status" => "IN_PROGRESS",
+              "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/51/job/2"
+            },
+            else: %{
+              "__typename" => "CheckRun",
+              "name" => "Analyze (python)",
+              "status" => "COMPLETED",
+              "conclusion" => "SUCCESS",
+              "detailsUrl" => "https://github.com/Subconscious-ai/example/actions/runs/51/job/2"
+            }
+          ),
+          if(count == 1,
+            do: %{"__typename" => "StatusContext", "context" => "CodeQL", "state" => "FAILURE"},
+            else: %{"__typename" => "StatusContext", "context" => "CodeQL", "state" => "SUCCESS"}
           )
         ])
       end
