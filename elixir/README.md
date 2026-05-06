@@ -65,6 +65,14 @@ mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
 ```
 
+Local multi-repo launchers:
+
+- `./run-four-repos.local.sh` starts the proved practice set on ports `4001` through `4004`.
+- `./run-second-wave-repos.local.sh` starts the second-wave onboarding set on ports `4005` through `4008`:
+  `design-system`, `causalactions`, `causalflow`, and `causalintelligence`.
+
+Run `./run-second-wave-repos.local.sh --dry-run` before starting the second-wave runners. This validates workflow config without launching agents.
+
 ## Configuration
 
 Pass a custom workflow file path to `./bin/symphony` when starting the service:
