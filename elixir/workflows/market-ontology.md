@@ -27,10 +27,12 @@ hooks:
     set -eu
     git clone https://github.com/Subconscious-ai/market-ontology.git .
     git config core.hooksPath /dev/null || true
+    python3 -m venv .venv
+    .venv/bin/python -m pip install -e ".[dev]"
 validation:
-  preflight: bash scripts/agent/preflight.sh
-  fast: bash scripts/agent/validate-fast.sh
-  full: bash scripts/agent/validate-full.sh
+  preflight: PYTHON=.venv/bin/python bash scripts/agent/preflight.sh
+  fast: PYTHON=.venv/bin/python bash scripts/agent/validate-fast.sh
+  full: PYTHON=.venv/bin/python bash scripts/agent/validate-full.sh
   deploy_evidence: github_checks
   evidence_required: true
 evidence_gate:
