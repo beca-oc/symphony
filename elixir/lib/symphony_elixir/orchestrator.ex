@@ -856,7 +856,7 @@ defmodule SymphonyElixir.Orchestrator do
           nil
       end
 
-    case DeliveryEvidence.finalize_issue_with_report(issue, workspace) do
+    case DeliveryEvidence.finalize_issue_with_report(issue, workspace, publisher_evidence: publisher_evidence) do
       {:ok, report} ->
         RunTrace.record(
           running_entry,
@@ -1028,7 +1028,8 @@ defmodule SymphonyElixir.Orchestrator do
 
         case DeliveryEvidence.finalize_issue_with_report(
                Map.get(running_entry, :issue),
-               Map.get(running_entry, :workspace_path)
+               Map.get(running_entry, :workspace_path),
+               publisher_evidence: publisher_evidence
              ) do
           {:ok, report} ->
             RunTrace.record(
