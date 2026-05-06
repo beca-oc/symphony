@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, RepairPacket, Tracker, Workspace}
 
   @type worker_host :: String.t() | nil
 
@@ -39,10 +39,10 @@ defmodule SymphonyElixir.AgentRunner do
             run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
           else
             {:error, {:workspace_hook_failed, "validation.preflight", _status, _output} = reason} ->
-              block_for_preflight_failure(issue, codex_update_recipient, reason)
+              block_for_preflight_failure(issue, codex_update_recipient, reason, opts)
 
             {:error, {:workspace_hook_timeout, "validation.preflight", _timeout_ms} = reason} ->
-              block_for_preflight_failure(issue, codex_update_recipient, reason)
+              block_for_preflight_failure(issue, codex_update_recipient, reason, opts)
 
             {:error, reason} ->
               {:error, reason}
@@ -86,8 +86,9 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
 
-  defp block_for_preflight_failure(issue, recipient, reason) do
-    body = preflight_blocker_comment(reason)
+  defp block_for_preflight_failure(issue, recipient, reason, opts) do
+    repair_attempt = opts |> Keyword.get(:attempt) |> repair_attempt()
+    body = RepairPacket.from_preflight(reason, repair_attempt: repair_attempt) |> RepairPacket.render()
 
     notify_harness_blocked(recipient, issue, :preflight, reason)
 
@@ -105,43 +106,8 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp notify_harness_blocked(_recipient, _issue, _gate, _reason), do: :ok
 
-  defp preflight_blocker_comment(reason) do
-    """
-    ## Symphony Harness Blocker
-
-    Gate: validation.preflight
-    Result: failed
-
-    #{format_preflight_reason(reason)}
-
-    Symphony moved this issue to Rework before starting Codex because the deterministic preflight failed.
-    """
-  end
-
-  defp format_preflight_reason({:workspace_hook_failed, "validation.preflight", status, output}) do
-    """
-    Exit status: #{status}
-
-    Output:
-    #{truncate_output(output)}
-    """
-  end
-
-  defp format_preflight_reason({:workspace_hook_timeout, "validation.preflight", timeout_ms}) do
-    "Timed out after #{timeout_ms}ms."
-  end
-
-  defp format_preflight_reason(reason), do: inspect(reason)
-
-  defp truncate_output(output, max_bytes \\ 4_096) do
-    text = IO.iodata_to_binary(output || "")
-
-    if byte_size(text) <= max_bytes do
-      text
-    else
-      binary_part(text, 0, max_bytes) <> "... (truncated)"
-    end
-  end
+  defp repair_attempt(attempt) when is_integer(attempt) and attempt > 0, do: attempt
+  defp repair_attempt(_attempt), do: 1
 
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)

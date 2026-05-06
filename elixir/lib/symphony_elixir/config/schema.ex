@@ -297,7 +297,17 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:github_required_checks, :github_optional_checks, :allow_skipped_checks, :require_all_checks, :timeout_seconds], empty_values: [])
+      |> cast(
+        attrs,
+        [
+          :github_required_checks,
+          :github_optional_checks,
+          :allow_skipped_checks,
+          :require_all_checks,
+          :timeout_seconds
+        ],
+        empty_values: []
+      )
       |> update_change(:github_required_checks, &normalize_string_list/1)
       |> update_change(:github_optional_checks, &normalize_string_list/1)
       |> update_change(:allow_skipped_checks, &normalize_string_list/1)
@@ -312,6 +322,72 @@ defmodule SymphonyElixir.Config.Schema do
     end
 
     defp normalize_string_list(_values), do: []
+  end
+
+  defmodule Repair do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @default_retryable_failure_buckets [
+      "preflight",
+      "validation_failed",
+      "ci_failed",
+      "ci_timeout",
+      "git_push_failed",
+      "missing_pr",
+      "missing_label",
+      "missing_workpad",
+      "missing_pushed_sha",
+      "pushed_sha_mismatch",
+      "branch_mismatch",
+      "missing_validation",
+      "missing_deploy_evidence",
+      "merge_conflict"
+    ]
+
+    @default_terminal_failure_buckets [
+      "missing_secret",
+      "auth_blocked",
+      "unsafe_side_effect",
+      "ambiguous_scope"
+    ]
+
+    @primary_key false
+    embedded_schema do
+      field(:max_attempts, :integer, default: 2)
+      field(:retryable_failure_buckets, {:array, :string}, default: @default_retryable_failure_buckets)
+      field(:terminal_failure_buckets, {:array, :string}, default: @default_terminal_failure_buckets)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:max_attempts, :retryable_failure_buckets, :terminal_failure_buckets], empty_values: [])
+      |> update_change(:retryable_failure_buckets, &normalize_string_list/1)
+      |> update_change(:terminal_failure_buckets, &normalize_string_list/1)
+      |> validate_number(:max_attempts, greater_than: 0)
+      |> validate_bucket_list(:retryable_failure_buckets)
+      |> validate_bucket_list(:terminal_failure_buckets)
+    end
+
+    defp normalize_string_list(values) when is_list(values) do
+      values
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+    end
+
+    defp normalize_string_list(_values), do: []
+
+    defp validate_bucket_list(changeset, field) do
+      validate_change(changeset, field, fn ^field, values ->
+        if Enum.any?(values, &(&1 == "")) do
+          [{field, "bucket names must not be blank"}]
+        else
+          []
+        end
+      end)
+    end
   end
 
   defmodule Observability do
@@ -365,6 +441,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:validation, Validation, on_replace: :update, defaults_to_struct: true)
     embeds_one(:evidence_gate, EvidenceGate, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:repair, Repair, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
   end
@@ -460,6 +537,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:validation, with: &Validation.changeset/2)
     |> cast_embed(:evidence_gate, with: &EvidenceGate.changeset/2)
+    |> cast_embed(:repair, with: &Repair.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
   end

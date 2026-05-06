@@ -67,6 +67,50 @@ defmodule SymphonyElixir.RunTraceTest do
     end
   end
 
+  test "record promotes repair and semantic review lineage into top-level telemetry" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-run-trace-lineage-#{System.unique_integer([:positive])}")
+    trace_file = Path.join(test_root, "runs.ndjson")
+    old_trace_file = Application.get_env(:symphony_elixir, :run_trace_file)
+
+    try do
+      Application.put_env(:symphony_elixir, :run_trace_file, trace_file)
+
+      RunTrace.record(
+        %{
+          identifier: "BEC-200",
+          issue: %Issue{id: "issue-200", identifier: "BEC-200", state: "Rework"},
+          started_at: DateTime.utc_now()
+        },
+        :rework,
+        :ci_failed,
+        %{
+          attempt_kind: :repair,
+          attempt_number: 2,
+          repair_of_trace_id: "trace-delivery-1",
+          failing_check_url: "https://github.com/Subconscious-ai/example/actions/runs/10/job/11",
+          passing_check_url: "https://github.com/Subconscious-ai/example/actions/runs/12/job/13",
+          semantic_review: %{verdict: :pass, reviewer_id: "openclaw-reviewer-merge-captain"},
+          reviewed_sha: "abc123",
+          merge_eligibility: :human_review
+        }
+      )
+
+      [line] = trace_file |> File.read!() |> String.trim() |> String.split("\n")
+      assert {:ok, payload} = Jason.decode(line)
+      assert payload["attempt_kind"] == "repair"
+      assert payload["attempt_number"] == 2
+      assert payload["repair_of_trace_id"] == "trace-delivery-1"
+      assert payload["failing_check_url"] =~ "/actions/runs/10/job/11"
+      assert payload["passing_check_url"] =~ "/actions/runs/12/job/13"
+      assert payload["semantic_review"]["verdict"] == "pass"
+      assert payload["reviewed_sha"] == "abc123"
+      assert payload["merge_eligibility"] == "human_review"
+    after
+      restore_app_env(:run_trace_file, old_trace_file)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "record promotes delivery evidence and checker report into top-level telemetry" do
     test_root = Path.join(System.tmp_dir!(), "symphony-elixir-run-trace-evidence-#{System.unique_integer([:positive])}")
     trace_file = Path.join(test_root, "runs.ndjson")

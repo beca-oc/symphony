@@ -892,9 +892,61 @@ defmodule SymphonyElixir.DeliveryEvidenceTest do
 
       assert "missing Linear workpad comment headed ## Codex Workpad" in failures
       assert_receive {:memory_tracker_comment, "issue-finalize-blocked", block_comment}, 500
-      assert block_comment =~ "## Symphony Harness Blocker"
+      assert block_comment =~ "## Symphony Repair Packet"
       assert block_comment =~ "Failure bucket: missing_workpad"
+      assert block_comment =~ "Attempt: 1"
+      assert block_comment =~ "Retry allowed: true"
+      assert block_comment =~ "Next action: retry_same_branch"
       assert_receive {:memory_tracker_state_update, "issue-finalize-blocked", "Rework"}, 500
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "failed gates create fresh repair packets instead of reusing stale blockers" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-repair-packet-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace = Path.join(test_root, "workspace")
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "README.md"), "# repair packet\n")
+      System.cmd("git", ["-C", workspace, "init", "-b", "codex/BEC-88-repair"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "repair packet"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        validation_evidence_required: true
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-repair-packet",
+        identifier: "BEC-88",
+        title: "Repair packet",
+        state: "In Progress"
+      }
+
+      assert {:error, {:evidence_gate_failed, _failures}} =
+               DeliveryEvidence.finalize_issue(issue, workspace,
+                 comments: ["## Symphony Repair Packet\n\nAttempt: 99\nFailure bucket: stale"],
+                 pull_request: nil,
+                 repair_attempt: 2
+               )
+
+      assert_receive {:memory_tracker_comment, "issue-repair-packet", packet}, 500
+      assert packet =~ "## Symphony Repair Packet"
+      assert packet =~ "Attempt: 2"
+      assert packet =~ "Failure bucket: missing_workpad"
+      refute packet =~ "stale"
+      assert_receive {:memory_tracker_state_update, "issue-repair-packet", "Rework"}, 500
     after
       File.rm_rf(test_root)
     end

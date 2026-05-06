@@ -365,8 +365,17 @@ defmodule SymphonyElixir.ExtensionsTest do
         issue_identifier: "BEC-TRACE",
         outcome: "human_review",
         failure_bucket: "none",
+        attempt_kind: "repair",
+        attempt_number: 2,
+        repair_of_trace_id: "trace-delivery-1",
         pr_url: "https://github.com/Subconscious-ai/spice-harvester/pull/211",
         check_url: "https://github.com/Subconscious-ai/spice-harvester/actions/runs/1/job/2",
+        failing_check_url: "https://github.com/Subconscious-ai/spice-harvester/actions/runs/0/job/1",
+        passing_check_url: "https://github.com/Subconscious-ai/spice-harvester/actions/runs/1/job/2",
+        repair_packet: %{"failure_bucket" => "ci_failed", "next_action" => "retry_same_branch"},
+        semantic_review: %{"verdict" => "pass", "reviewer_id" => "openclaw-reviewer-merge-captain"},
+        reviewed_sha: "abc123",
+        merge_eligibility: "human_review",
         runtime_seconds: 138,
         manual_rescue_count: 0,
         tokens: %{"uncached_total_tokens" => 75_418, "total_tokens" => 499_994},
@@ -446,12 +455,59 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_identifier" => "BEC-TRACE",
                  "outcome" => "human_review",
                  "failure_bucket" => "none",
+                 "attempt_kind" => "repair",
+                 "attempt_number" => 2,
+                 "repair_of_trace_id" => "trace-delivery-1",
                  "pr_url" => "https://github.com/Subconscious-ai/spice-harvester/pull/211",
                  "check_url" => "https://github.com/Subconscious-ai/spice-harvester/actions/runs/1/job/2",
+                 "failing_check_url" => "https://github.com/Subconscious-ai/spice-harvester/actions/runs/0/job/1",
+                 "passing_check_url" => "https://github.com/Subconscious-ai/spice-harvester/actions/runs/1/job/2",
+                 "repair_packet" => %{"failure_bucket" => "ci_failed", "next_action" => "retry_same_branch"},
+                 "semantic_review" => %{"verdict" => "pass", "reviewer_id" => "openclaw-reviewer-merge-captain"},
+                 "reviewed_sha" => "abc123",
+                 "merge_eligibility" => "human_review",
                  "runtime_seconds" => 138,
                  "manual_rescue_count" => 0,
                  "tokens" => %{"uncached_total_tokens" => 75_418, "total_tokens" => 499_994},
                  "recorded_at" => "2026-05-05T22:16:03Z"
+               }
+             ],
+             "completed_runs_by_issue" => [
+               %{
+                 "issue_identifier" => "BEC-TRACE",
+                 "latest_outcome" => "human_review",
+                 "latest_failure_bucket" => "none",
+                 "latest_repair_packet" => %{"failure_bucket" => "ci_failed", "next_action" => "retry_same_branch"},
+                 "latest_semantic_review" => %{
+                   "verdict" => "pass",
+                   "reviewer_id" => "openclaw-reviewer-merge-captain"
+                 },
+                 "merge_eligibility" => "human_review",
+                 "attempts" => [
+                   %{
+                     "issue_identifier" => "BEC-TRACE",
+                     "outcome" => "human_review",
+                     "failure_bucket" => "none",
+                     "attempt_kind" => "repair",
+                     "attempt_number" => 2,
+                     "repair_of_trace_id" => "trace-delivery-1",
+                     "pr_url" => "https://github.com/Subconscious-ai/spice-harvester/pull/211",
+                     "check_url" => "https://github.com/Subconscious-ai/spice-harvester/actions/runs/1/job/2",
+                     "failing_check_url" => "https://github.com/Subconscious-ai/spice-harvester/actions/runs/0/job/1",
+                     "passing_check_url" => "https://github.com/Subconscious-ai/spice-harvester/actions/runs/1/job/2",
+                     "repair_packet" => %{"failure_bucket" => "ci_failed", "next_action" => "retry_same_branch"},
+                     "semantic_review" => %{
+                       "verdict" => "pass",
+                       "reviewer_id" => "openclaw-reviewer-merge-captain"
+                     },
+                     "reviewed_sha" => "abc123",
+                     "merge_eligibility" => "human_review",
+                     "runtime_seconds" => 138,
+                     "manual_rescue_count" => 0,
+                     "tokens" => %{"uncached_total_tokens" => 75_418, "total_tokens" => 499_994},
+                     "recorded_at" => "2026-05-05T22:16:03Z"
+                   }
+                 ]
                }
              ]
            }

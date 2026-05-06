@@ -136,6 +136,9 @@ defmodule SymphonyElixir.TestSupport do
           evidence_gate_allow_skipped_checks: nil,
           evidence_gate_require_all_checks: nil,
           evidence_gate_timeout_seconds: nil,
+          repair_max_attempts: nil,
+          repair_retryable_failure_buckets: nil,
+          repair_terminal_failure_buckets: nil,
           observability_enabled: true,
           observability_refresh_ms: 1_000,
           observability_render_interval_ms: 16,
@@ -189,6 +192,9 @@ defmodule SymphonyElixir.TestSupport do
     evidence_gate_allow_skipped_checks = Keyword.get(config, :evidence_gate_allow_skipped_checks)
     evidence_gate_require_all_checks = Keyword.get(config, :evidence_gate_require_all_checks)
     evidence_gate_timeout_seconds = Keyword.get(config, :evidence_gate_timeout_seconds)
+    repair_max_attempts = Keyword.get(config, :repair_max_attempts)
+    repair_retryable_failure_buckets = Keyword.get(config, :repair_retryable_failure_buckets)
+    repair_terminal_failure_buckets = Keyword.get(config, :repair_terminal_failure_buckets)
     observability_enabled = Keyword.get(config, :observability_enabled)
     observability_refresh_ms = Keyword.get(config, :observability_refresh_ms)
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
@@ -244,6 +250,7 @@ defmodule SymphonyElixir.TestSupport do
           evidence_gate_require_all_checks,
           evidence_gate_timeout_seconds
         ),
+        repair_yaml(repair_max_attempts, repair_retryable_failure_buckets, repair_terminal_failure_buckets),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
         "---",
@@ -351,6 +358,19 @@ defmodule SymphonyElixir.TestSupport do
 
   defp require_all_checks_entry(nil), do: nil
   defp require_all_checks_entry(value), do: "  require_all_checks: #{yaml_value(value)}"
+
+  defp repair_yaml(nil, nil, nil), do: nil
+
+  defp repair_yaml(max_attempts, retryable_failure_buckets, terminal_failure_buckets) do
+    [
+      "repair:",
+      max_attempts && "  max_attempts: #{yaml_value(max_attempts)}",
+      retryable_failure_buckets && "  retryable_failure_buckets: #{yaml_value(retryable_failure_buckets)}",
+      terminal_failure_buckets && "  terminal_failure_buckets: #{yaml_value(terminal_failure_buckets)}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
 
   defp observability_yaml(enabled, refresh_ms, render_interval_ms) do
     [

@@ -5,11 +5,28 @@ defmodule SymphonyElixir.DeliveryEvidence do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Tracker}
+  alias SymphonyElixir.{Config, RepairPacket, Tracker}
   alias SymphonyElixir.Linear.Issue
 
   @workpad_heading "## Codex Workpad"
   @validation_result_pattern ~r/(validation|validate|verify|test|ci).*(pass|passed|success|succeeded|exit\s*0|0)/i
+  @failure_bucket_patterns [
+    {"missing linear workpad", :missing_workpad},
+    {"branch does not start", :branch_mismatch},
+    {"missing git branch", :branch_mismatch},
+    {"missing final commit sha", :missing_pushed_sha},
+    {"head commit does not match", :pushed_sha_mismatch},
+    {"missing draft pull request", :missing_pr},
+    {"not draft", :missing_pr},
+    {"missing symphony label", :missing_label},
+    {"missing validation", :missing_validation},
+    {"missing deployment/check evidence", :missing_deploy_evidence},
+    {"merge conflicts", :merge_conflict},
+    {"check failed", :ci_failed},
+    {"check skipped", :ci_failed},
+    {"check still pending", :ci_pending},
+    {"missing required pr check", :ci_pending}
+  ]
 
   @type evidence :: %{
           branch: String.t(),
@@ -46,7 +63,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
     if required?() do
       case poll_evaluation_for_issue(issue, workspace, opts) do
         {:ok, evidence} -> approve_issue_with_report(issue, evidence)
-        {:error, report} -> block_issue(issue, report)
+        {:error, report} -> block_issue(issue, report, opts)
         {:fetch_error, reason} -> {:error, reason}
       end
     else
@@ -74,24 +91,9 @@ defmodule SymphonyElixir.DeliveryEvidence do
       |> Enum.map_join("\n", &to_string/1)
       |> String.downcase()
 
-    cond do
-      String.contains?(text, "missing linear workpad") -> :missing_workpad
-      String.contains?(text, "branch does not start") -> :branch_mismatch
-      String.contains?(text, "missing git branch") -> :branch_mismatch
-      String.contains?(text, "missing final commit sha") -> :missing_pushed_sha
-      String.contains?(text, "head commit does not match") -> :pushed_sha_mismatch
-      String.contains?(text, "missing draft pull request") -> :missing_pr
-      String.contains?(text, "not draft") -> :missing_pr
-      String.contains?(text, "missing symphony label") -> :missing_label
-      String.contains?(text, "missing validation") -> :missing_validation
-      String.contains?(text, "missing deployment/check evidence") -> :missing_deploy_evidence
-      String.contains?(text, "merge conflicts") -> :merge_conflict
-      String.contains?(text, "check failed") -> :ci_failed
-      String.contains?(text, "check skipped") -> :ci_failed
-      String.contains?(text, "check still pending") -> :ci_pending
-      String.contains?(text, "missing required pr check") -> :ci_pending
-      true -> :evidence_gate
-    end
+    Enum.find_value(@failure_bucket_patterns, :evidence_gate, fn {pattern, bucket} ->
+      if String.contains?(text, pattern), do: bucket
+    end)
   end
 
   def failure_bucket(reason) when is_atom(reason), do: reason
@@ -101,6 +103,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
     case comments_for_issue(issue, opts) do
       {:ok, comments} ->
         pull_request = pull_request_for_workspace(workspace, opts)
+
         evaluate(issue, workspace,
           comments: comments,
           pull_request: pull_request,
@@ -125,8 +128,11 @@ defmodule SymphonyElixir.DeliveryEvidence do
     end
   end
 
-  defp block_issue(%Issue{id: issue_id}, report) do
-    case create_comment_once(issue_id, "## Symphony Harness Blocker", blocker_comment(report)) do
+  defp block_issue(%Issue{id: issue_id}, report, opts) do
+    repair_packet = RepairPacket.from_report(report, opts)
+    report = Map.put(report, :repair_packet, repair_packet)
+
+    case Tracker.create_comment(issue_id, RepairPacket.render(repair_packet)) do
       :ok ->
         case Tracker.update_issue_state(issue_id, "Rework") do
           :ok -> {:error, report}
@@ -697,29 +703,6 @@ defmodule SymphonyElixir.DeliveryEvidence do
     """
   end
 
-  defp blocker_comment(report) do
-    failures =
-      report.failures
-      |> Enum.map_join("\n", &("- " <> &1))
-
-    """
-    ## Symphony Harness Blocker
-
-    Gate: delivery evidence
-    Result: failed
-    Failure bucket: #{failure_bucket(report.failures)}
-
-    #{failures}
-
-    ### Checker
-    - Required checks: #{checker_required_checks(report.evidence.checker)}
-    - Observed checks:
-    #{checker_observed_checks(report.evidence.checker)}
-
-    Symphony moved this issue to Rework because required delivery evidence is incomplete.
-    """
-  end
-
   defp checker_required_checks(%{required_checks: []}), do: "none configured"
 
   defp checker_required_checks(%{required_checks: checks}) when is_list(checks) do
@@ -731,12 +714,10 @@ defmodule SymphonyElixir.DeliveryEvidence do
   defp checker_observed_checks(%{observed_checks: []}), do: "    - none reported"
 
   defp checker_observed_checks(%{observed_checks: checks}) when is_list(checks) do
-    checks
-    |> Enum.map(fn check ->
+    Enum.map_join(checks, "\n", fn check ->
       url = if is_binary(check.url), do: " (#{check.url})", else: ""
       "    - #{check.name}: #{check.state}#{url}"
     end)
-    |> Enum.join("\n")
   end
 
   defp checker_observed_checks(_checker), do: "    - none reported"

@@ -1048,6 +1048,31 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert message =~ "validation.deploy_evidence"
   end
 
+  test "repair policy config parses with deterministic defaults and bucket lists" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      repair_max_attempts: 3,
+      repair_retryable_failure_buckets: ["validation_failed", "ci_failed", "merge_conflict"],
+      repair_terminal_failure_buckets: ["missing_secret", "auth_blocked"]
+    )
+
+    config = Config.settings!()
+
+    assert config.repair.max_attempts == 3
+    assert config.repair.retryable_failure_buckets == ["validation_failed", "ci_failed", "merge_conflict"]
+    assert config.repair.terminal_failure_buckets == ["missing_secret", "auth_blocked"]
+  end
+
+  test "repair policy rejects invalid attempt limits and blank bucket names" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      repair_max_attempts: 0,
+      repair_retryable_failure_buckets: ["validation_failed", ""]
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
+    assert message =~ "repair.max_attempts must be greater than 0"
+    assert message =~ "repair.retryable_failure_buckets bucket names must not be blank"
+  end
+
   test "active repo workflows require the repo-owned Symphony gate check" do
     workflow_root = Path.expand("../../workflows", __DIR__)
 

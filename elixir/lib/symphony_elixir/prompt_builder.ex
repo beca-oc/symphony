@@ -39,8 +39,7 @@ defmodule SymphonyElixir.PromptBuilder do
         comments
         |> Enum.filter(&harness_repair_comment?/1)
         |> Enum.take(-@max_harness_comments)
-        |> Enum.map(&truncate_comment/1)
-        |> Enum.join("\n\n---\n\n")
+        |> Enum.map_join("\n\n---\n\n", &truncate_comment/1)
         |> nil_if_blank()
 
       {:error, _reason} ->
@@ -55,7 +54,8 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   defp harness_repair_comment?(body) when is_binary(body) do
-    String.contains?(body, "## Symphony Harness Blocker") or
+    String.contains?(body, "## Symphony Repair Packet") or
+      String.contains?(body, "## Symphony Harness Blocker") or
       (String.contains?(body, "## Codex Workpad") and String.match?(body, ~r/(Branch|Draft PR|PR):/i)) or
       (String.contains?(body, "## Symphony Evidence Gate") and String.match?(body, ~r/result:\s*failed/i))
   end
