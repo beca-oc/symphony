@@ -17,7 +17,7 @@ tracker:
 polling:
   interval_ms: 60000
 workspace:
-  root: ~/code/symphony-workspaces/causl.io
+  root: ~/code/symphony-workspaces/causl-io
 repo:
   name: causl.io
   github_repo: Subconscious-ai/causl.io
