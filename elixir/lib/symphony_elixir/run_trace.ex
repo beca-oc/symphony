@@ -38,6 +38,19 @@ defmodule SymphonyElixir.RunTrace do
 
   def record(_running_entry, _outcome, _failure_bucket, _details), do: :ok
 
+  @spec recent(pos_integer()) :: [map()]
+  def recent(limit \\ 20)
+
+  def recent(limit) when is_integer(limit) and limit > 0 do
+    trace_file()
+    |> read_trace_lines()
+    |> Enum.map(&decode_trace_line/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.take(limit)
+  end
+
+  def recent(_limit), do: []
+
   defp base_payload(running_entry, outcome, failure_bucket) do
     issue = Map.get(running_entry, :issue)
     started_at = Map.get(running_entry, :started_at)
@@ -90,6 +103,29 @@ defmodule SymphonyElixir.RunTrace do
       {:error, reason} ->
         Logger.warning("Failed to append Symphony run trace path=#{path}: #{inspect(reason)}")
         :ok
+    end
+  end
+
+  defp read_trace_lines(path) when is_binary(path) do
+    case File.read(path) do
+      {:ok, contents} ->
+        contents
+        |> String.split("\n", trim: true)
+        |> Enum.reverse()
+
+      {:error, :enoent} ->
+        []
+
+      {:error, reason} ->
+        Logger.warning("Failed to read Symphony run trace path=#{path}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp decode_trace_line(line) when is_binary(line) do
+    case Jason.decode(line) do
+      {:ok, %{} = payload} -> payload
+      _ -> nil
     end
   end
 

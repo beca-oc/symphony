@@ -3,14 +3,28 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-if [[ -f ../.env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ../.env
-  set +a
+source_env() {
+  local env_file="$1"
+  if [[ -f "$env_file" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$env_file"
+    set +a
+  fi
+}
+
+source_env ../.env
+source_env ./.env
+
+node ../scripts/symphony/validate_workflows.mjs
+
+if [[ "${1:-}" == "--dry-run" ]]; then
+  exit 0
 fi
 
-export PATH="/Users/aviyashchin/.asdf/installs/erlang/28.1.1/bin:/Users/aviyashchin/.asdf/installs/elixir/1.19.1-otp-28/bin:$PATH"
+if [[ ! -x ./bin/symphony ]]; then
+  mise exec -- mix build
+fi
 
 ACK="--i-understand-that-this-will-be-running-without-the-usual-guardrails"
 
@@ -30,7 +44,7 @@ start_runner() {
   sleep 1
 
   screen -dmS "symphony-${name}" /bin/zsh -lc \
-    "cd '$PWD' && exec ./bin/symphony $ACK --logs-root './log/${name}' --port '${port}' '${workflow}'"
+    "cd '$PWD' && exec mise exec -- ./bin/symphony $ACK --logs-root './log/${name}' --port '${port}' '${workflow}'"
 }
 
 start_runner "ai-chatbot" 4001 "workflows/ai-chatbot.md"
@@ -39,3 +53,12 @@ start_runner "causl" 4003 "workflows/causl-io.md"
 start_runner "market-ontology" 4004 "workflows/market-ontology.md"
 
 screen -ls || true
+
+cat <<'EOF'
+
+Dashboards:
+- ai-chatbot      http://127.0.0.1:4001/
+- spice-harvester http://127.0.0.1:4002/
+- causl.io        http://127.0.0.1:4003/
+- market-ontology http://127.0.0.1:4004/
+EOF

@@ -48,6 +48,7 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) do
+    append_comment(issue_id, body)
     send_event({:memory_tracker_comment, issue_id, body})
     :ok
   end
@@ -71,6 +72,12 @@ defmodule SymphonyElixir.Tracker.Memory do
       pid when is_pid(pid) -> send(pid, message)
       _ -> :ok
     end
+  end
+
+  defp append_comment(issue_id, body) when is_binary(issue_id) and is_binary(body) do
+    comments = Application.get_env(:symphony_elixir, :memory_tracker_comments, %{})
+    existing = Map.get(comments, issue_id, [])
+    Application.put_env(:symphony_elixir, :memory_tracker_comments, Map.put(comments, issue_id, existing ++ [body]))
   end
 
   defp normalize_state(state) when is_binary(state) do
