@@ -279,6 +279,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
                           <%= entry.outcome || "unknown" %>
                         </span>
                         <span class="muted"><%= entry.failure_bucket || "none" %></span>
+                        <span class="muted">
+                          <%= entry.attempt_kind || "delivery" %> #<%= entry.attempt_number || 1 %>
+                        </span>
+                        <%= if entry.merge_eligibility do %>
+                          <span class="muted">merge: <%= entry.merge_eligibility %></span>
+                        <% end %>
                       </div>
                     </td>
                     <td>
@@ -292,6 +298,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
                           <a class="issue-link" href={entry.check_url}>Check</a>
                         <% else %>
                           <span class="muted">Check n/a</span>
+                        <% end %>
+                        <%= if entry.semantic_review do %>
+                          <span class="muted">review: <%= entry.semantic_review["verdict"] || entry.semantic_review[:verdict] || "recorded" %></span>
                         <% end %>
                       </div>
                     </td>

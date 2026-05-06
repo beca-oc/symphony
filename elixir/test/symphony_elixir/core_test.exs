@@ -1803,13 +1803,123 @@ defmodule SymphonyElixir.CoreTest do
 
       refute File.exists?(codex_trace)
       assert_receive {:memory_tracker_comment, "issue-preflight", body}, 500
-      assert body =~ "## Symphony Harness Blocker"
+      assert body =~ "## Symphony Repair Packet"
       assert body =~ "validation.preflight"
+      assert body =~ "Failure bucket: preflight"
+      assert body =~ "Retry allowed: true"
+      assert body =~ "Next action: retry_same_branch"
       assert body =~ "missing deps"
       assert_receive {:memory_tracker_state_update, "issue-preflight", "Rework"}, 500
     after
       File.rm_rf(test_root)
     end
+  end
+
+  test "preflight repair packet records exhausted attempt before blocking" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-preflight-attempt-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      File.mkdir_p!(workspace_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        validation_preflight: "printf 'still missing deps\\n' && exit 42",
+        repair_max_attempts: 2
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-preflight-attempt",
+        identifier: "MT-PREFLIGHT-ATTEMPT",
+        title: "Preflight should record attempt",
+        description: "No Codex process should start",
+        state: "Rework"
+      }
+
+      assert :ok = AgentRunner.run(issue, nil, attempt: 2)
+
+      assert_receive {:memory_tracker_comment, "issue-preflight-attempt", body}, 500
+      assert body =~ "## Symphony Repair Packet"
+      assert body =~ "Attempt: 2"
+      assert body =~ "Retry allowed: false"
+      assert body =~ "Next action: human_required"
+      assert body =~ "still missing deps"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "retryable preflight failure schedules bounded repair retry" do
+    write_workflow_file!(Workflow.workflow_file_path(), repair_max_attempts: 2)
+
+    issue_id = "issue-preflight-retry"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :PreflightRetryOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: "MT-PREFLIGHT-RETRY",
+      issue: %Issue{id: issue_id, identifier: "MT-PREFLIGHT-RETRY", state: "In Progress"},
+      harness_blocked: %{gate: :preflight, reason: {:workspace_hook_failed, "validation.preflight", 42, "missing deps"}},
+      retry_attempt: 0,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    assert MapSet.member?(state.completed, issue_id)
+
+    assert %{attempt: 2, due_at_ms: due_at_ms, identifier: "MT-PREFLIGHT-RETRY", error: "preflight failed"} =
+             state.retry_attempts[issue_id]
+
+    assert_due_in_range(due_at_ms, 18_500, 20_500)
+  end
+
+  test "orchestrator marks direct Rework dispatch as a repair attempt" do
+    assert 1 =
+             Orchestrator.dispatch_attempt_for_issue_for_test(
+               %Issue{id: "issue-rework", identifier: "MT-REWORK", state: "Rework"},
+               nil
+             )
+
+    assert nil ==
+             Orchestrator.dispatch_attempt_for_issue_for_test(
+               %Issue{id: "issue-todo", identifier: "MT-TODO", state: "Todo"},
+               nil
+             )
+
+    assert 3 =
+             Orchestrator.dispatch_attempt_for_issue_for_test(
+               %Issue{id: "issue-explicit", identifier: "MT-EXPLICIT", state: "Rework"},
+               3
+             )
   end
 
   test "agent runner surfaces ssh startup failures instead of silently hopping hosts" do

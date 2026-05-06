@@ -7,7 +7,18 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, DeliveryEvidence, DeliveryPublisher, RunTrace, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{
+    AgentRunner,
+    Config,
+    DeliveryEvidence,
+    DeliveryPublisher,
+    RepairPolicy,
+    RunTrace,
+    StatusDashboard,
+    Tracker,
+    Workspace
+  }
+
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -339,6 +350,12 @@ defmodule SymphonyElixir.Orchestrator do
   def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
       when is_function(issue_fetcher, 1) do
     revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set())
+  end
+
+  @doc false
+  @spec dispatch_attempt_for_issue_for_test(Issue.t(), integer() | nil) :: integer() | nil
+  def dispatch_attempt_for_issue_for_test(%Issue{} = issue, attempt) do
+    dispatch_attempt_for_issue(issue, attempt)
   end
 
   @doc false
@@ -695,7 +712,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
     case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
-        do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
+        repair_attempt = dispatch_attempt_for_issue(refreshed_issue, attempt)
+
+        do_dispatch_issue(state, refreshed_issue, repair_attempt, preferred_worker_host)
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
@@ -711,6 +730,12 @@ defmodule SymphonyElixir.Orchestrator do
         state
     end
   end
+
+  defp dispatch_attempt_for_issue(%Issue{state: state_name}, nil) when is_binary(state_name) do
+    if normalize_issue_state(state_name) == "rework", do: 1, else: nil
+  end
+
+  defp dispatch_attempt_for_issue(_issue, attempt), do: attempt
 
   defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
     case resume_existing_delivery(state, issue, preferred_worker_host) do
@@ -856,13 +881,16 @@ defmodule SymphonyElixir.Orchestrator do
           nil
       end
 
-    case DeliveryEvidence.finalize_issue_with_report(issue, workspace, publisher_evidence: publisher_evidence) do
+    case DeliveryEvidence.finalize_issue_with_report(issue, workspace,
+           publisher_evidence: publisher_evidence,
+           repair_attempt: repair_attempt(running_entry)
+         ) do
       {:ok, report} ->
         RunTrace.record(
           running_entry,
           :human_review,
           :none,
-          delivery_trace_details(:restart_resume_delivery, publisher_evidence, report)
+          delivery_trace_details(:restart_resume_delivery, publisher_evidence, report, running_entry)
         )
 
         complete_issue(state, issue.id)
@@ -874,7 +902,7 @@ defmodule SymphonyElixir.Orchestrator do
           running_entry,
           :rework,
           failure_bucket({:evidence_gate_failed, failures}),
-          delivery_trace_details({:evidence_gate_failed, failures}, publisher_evidence, report)
+          delivery_trace_details({:evidence_gate_failed, failures}, publisher_evidence, report, running_entry)
         )
 
         complete_issue(state, issue.id)
@@ -886,7 +914,7 @@ defmodule SymphonyElixir.Orchestrator do
           running_entry,
           :rework,
           failure_bucket(reason),
-          delivery_trace_details(reason, publisher_evidence, %{})
+          delivery_trace_details(reason, publisher_evidence, %{}, running_entry)
         )
 
         complete_issue(state, issue.id)
@@ -1002,69 +1030,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_normal_agent_exit(%State{} = state, issue_id, running_entry, session_id) do
     cond do
       Map.get(running_entry, :harness_blocked) ->
-        Logger.info("Agent task completed after Symphony harness blocker for issue_id=#{issue_id} session_id=#{session_id}; not running delivery evidence gate")
-
-        RunTrace.record(running_entry, :rework, :preflight, %{harness_blocked: Map.get(running_entry, :harness_blocked)})
-
-        complete_issue(state, issue_id)
+        handle_harness_blocked_exit(state, issue_id, running_entry, session_id)
 
       DeliveryEvidence.required?() ->
-        Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; publishing delivery evidence")
-
-        publisher_evidence =
-          case DeliveryPublisher.publish(
-                 Map.get(running_entry, :issue),
-                 Map.get(running_entry, :workspace_path)
-               ) do
-            {:ok, evidence} ->
-              evidence
-
-            {:error, reason} ->
-              Logger.warning("Delivery publisher failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
-              nil
-          end
-
-        Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; running Symphony delivery evidence gate")
-
-        case DeliveryEvidence.finalize_issue_with_report(
-               Map.get(running_entry, :issue),
-               Map.get(running_entry, :workspace_path),
-               publisher_evidence: publisher_evidence
-             ) do
-          {:ok, report} ->
-            RunTrace.record(
-              running_entry,
-              :human_review,
-              :none,
-              delivery_trace_details(:delivery_evidence, publisher_evidence, report)
-            )
-
-            complete_issue(state, issue_id)
-
-          {:error, %{failures: failures} = report} ->
-            Logger.warning("Delivery evidence gate failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(failures)}")
-
-            RunTrace.record(
-              running_entry,
-              :rework,
-              failure_bucket({:evidence_gate_failed, failures}),
-              delivery_trace_details({:evidence_gate_failed, failures}, publisher_evidence, report)
-            )
-
-            complete_issue(state, issue_id)
-
-          {:error, reason} ->
-            Logger.warning("Delivery evidence gate failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
-
-            RunTrace.record(
-              running_entry,
-              :rework,
-              failure_bucket(reason),
-              delivery_trace_details(reason, publisher_evidence, %{})
-            )
-
-            complete_issue(state, issue_id)
-        end
+        finalize_normal_delivery_exit(state, issue_id, running_entry, session_id)
 
       Config.settings!().agent.continue_after_normal_exit ->
         Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
@@ -1094,16 +1063,111 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | running: Map.put(state.running, issue_id, running_entry)}
   end
 
-  defp delivery_trace_details(reason, publisher_evidence, report) do
+  defp handle_harness_blocked_exit(%State{} = state, issue_id, running_entry, session_id) do
+    Logger.info("Agent task completed after Symphony harness blocker for issue_id=#{issue_id} session_id=#{session_id}; not running delivery evidence gate")
+
+    RunTrace.record(running_entry, :rework, :preflight, %{harness_blocked: Map.get(running_entry, :harness_blocked)})
+
+    state = complete_issue(state, issue_id)
+    attempt = repair_attempt(running_entry)
+
+    if RepairPolicy.retryable?(Config.settings!().repair, :preflight, attempt) do
+      schedule_issue_retry(state, issue_id, attempt + 1, %{
+        identifier: running_entry.identifier,
+        error: "preflight failed",
+        worker_host: Map.get(running_entry, :worker_host),
+        workspace_path: Map.get(running_entry, :workspace_path)
+      })
+    else
+      state
+    end
+  end
+
+  defp delivery_trace_details(reason, publisher_evidence, report, running_entry) do
     %{
       gate: :delivery_evidence,
       reason: reason,
+      attempt_kind: attempt_kind(running_entry),
+      attempt_number: repair_attempt(running_entry),
       delivery_evidence: delivery_evidence_payload(publisher_evidence, report),
-      checker: Map.get(report, :checker)
+      checker: Map.get(report, :checker),
+      repair_packet: Map.get(report, :repair_packet)
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
   end
+
+  defp finalize_normal_delivery_exit(%State{} = state, issue_id, running_entry, session_id) do
+    Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; publishing delivery evidence")
+
+    publisher_evidence = publish_delivery_evidence(running_entry, issue_id, session_id)
+
+    Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; running Symphony delivery evidence gate")
+
+    case DeliveryEvidence.finalize_issue_with_report(
+           Map.get(running_entry, :issue),
+           Map.get(running_entry, :workspace_path),
+           publisher_evidence: publisher_evidence,
+           repair_attempt: repair_attempt(running_entry)
+         ) do
+      {:ok, report} ->
+        record_delivery_human_review(running_entry, publisher_evidence, report)
+        complete_issue(state, issue_id)
+
+      {:error, %{failures: failures} = report} ->
+        Logger.warning("Delivery evidence gate failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(failures)}")
+
+        RunTrace.record(
+          running_entry,
+          :rework,
+          failure_bucket({:evidence_gate_failed, failures}),
+          delivery_trace_details({:evidence_gate_failed, failures}, publisher_evidence, report, running_entry)
+        )
+
+        complete_issue(state, issue_id)
+
+      {:error, reason} ->
+        Logger.warning("Delivery evidence gate failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
+
+        RunTrace.record(
+          running_entry,
+          :rework,
+          failure_bucket(reason),
+          delivery_trace_details(reason, publisher_evidence, %{}, running_entry)
+        )
+
+        complete_issue(state, issue_id)
+    end
+  end
+
+  defp publish_delivery_evidence(running_entry, issue_id, session_id) do
+    case DeliveryPublisher.publish(
+           Map.get(running_entry, :issue),
+           Map.get(running_entry, :workspace_path)
+         ) do
+      {:ok, evidence} ->
+        evidence
+
+      {:error, reason} ->
+        Logger.warning("Delivery publisher failed for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
+        nil
+    end
+  end
+
+  defp record_delivery_human_review(running_entry, publisher_evidence, report) do
+    RunTrace.record(
+      running_entry,
+      :human_review,
+      :none,
+      delivery_trace_details(:delivery_evidence, publisher_evidence, report, running_entry)
+    )
+  end
+
+  defp attempt_kind(%{retry_attempt: attempt}) when is_integer(attempt) and attempt > 0, do: :repair
+  defp attempt_kind(_running_entry), do: :delivery
+
+  defp repair_attempt(%{retry_attempt: attempt}) when is_integer(attempt) and attempt > 0, do: attempt
+  defp repair_attempt(_running_entry), do: 1
 
   defp delivery_evidence_payload(_publisher_evidence, %{evidence: evidence}) when is_map(evidence) do
     compact_delivery_evidence(evidence)

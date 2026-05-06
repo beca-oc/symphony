@@ -20,6 +20,7 @@ defmodule SymphonyElixir.RunTrace do
   @spec record(map(), atom() | String.t(), atom() | String.t(), map()) :: :ok
   def record(running_entry, outcome, failure_bucket, details \\ %{})
 
+  @spec record(map(), atom() | String.t(), atom() | String.t(), map()) :: :ok
   def record(running_entry, outcome, failure_bucket, details) when is_map(running_entry) and is_map(details) do
     sanitized_details = sanitize(details)
 
@@ -27,6 +28,7 @@ defmodule SymphonyElixir.RunTrace do
       running_entry
       |> base_payload(outcome, failure_bucket)
       |> merge_detail_evidence(sanitized_details)
+      |> merge_attempt_lineage(sanitized_details)
       |> Map.merge(%{
         details: sanitized_details,
         recorded_at: DateTime.utc_now() |> DateTime.to_iso8601()
@@ -41,6 +43,7 @@ defmodule SymphonyElixir.RunTrace do
   @spec recent(pos_integer()) :: [map()]
   def recent(limit \\ 20)
 
+  @spec recent(pos_integer()) :: [map()]
   def recent(limit) when is_integer(limit) and limit > 0 do
     trace_file()
     |> read_trace_lines()
@@ -155,6 +158,19 @@ defmodule SymphonyElixir.RunTrace do
     |> maybe_put_map(:delivery_evidence, delivery_evidence)
     |> maybe_put_map(:checker, checker)
     |> maybe_put_manual_rescue_count(details)
+  end
+
+  defp merge_attempt_lineage(payload, details) when is_map(payload) and is_map(details) do
+    payload
+    |> maybe_put_detail_value(:attempt_kind, details, "attempt_kind")
+    |> maybe_put_detail_value(:attempt_number, details, "attempt_number")
+    |> maybe_put_detail_value(:repair_of_trace_id, details, "repair_of_trace_id")
+    |> maybe_put_detail_value(:failing_check_url, details, "failing_check_url")
+    |> maybe_put_detail_value(:passing_check_url, details, "passing_check_url")
+    |> maybe_put_detail_value(:reviewed_sha, details, "reviewed_sha")
+    |> maybe_put_detail_value(:merge_eligibility, details, "merge_eligibility")
+    |> maybe_put_map(:semantic_review, map_value(details, "semantic_review"))
+    |> maybe_put_map(:repair_packet, map_value(details, "repair_packet"))
   end
 
   defp map_value(map, key) when is_map(map) do

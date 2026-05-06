@@ -6,6 +6,7 @@ import {
   upsertOpenClawConfig,
   validateOpenClawConfig,
   validateReviewerEvidence,
+  validateSemanticReview,
   validateTicket,
 } from "./symphony_agents.mjs";
 
@@ -91,4 +92,62 @@ test("Merge policy allows only low-risk green work without human approval", () =
     action: "block",
     reason: "mechanical_evidence_failed",
   });
+});
+
+test("Semantic review requires mechanical evidence and current PR head SHA", () => {
+  const mechanicalEvidence = {
+    linear_has_workpad: true,
+    linear_has_evidence_gate: true,
+    checker_passed: true,
+    branch: "codex/BEC-1-test",
+    pr_label: "symphony",
+    pushed_sha_matches: true,
+    validation_recorded: true,
+    required_ci_green: true,
+    check_url: "https://github.com/Subconscious-ai/example/actions/runs/1/job/2",
+    failure_bucket: "none",
+    trace_matches: true,
+  };
+
+  assert.deepEqual(
+    validateSemanticReview({
+      mechanicalEvidence,
+      currentHeadSha: "abc123",
+      review: {
+        reviewer_id: "openclaw-reviewer-merge-captain",
+        pr_url: "https://github.com/Subconscious-ai/example/pull/1",
+        reviewed_sha: "abc123",
+        verdict: "pass",
+      },
+    }),
+    { passed: true, errors: [] }
+  );
+
+  const stale = validateSemanticReview({
+    mechanicalEvidence,
+    currentHeadSha: "def456",
+    review: {
+      reviewer_id: "openclaw-reviewer-merge-captain",
+      pr_url: "https://github.com/Subconscious-ai/example/pull/1",
+      reviewed_sha: "abc123",
+      verdict: "pass",
+    },
+  });
+
+  assert.equal(stale.passed, false);
+  assert.ok(stale.errors.includes("stale_review_sha"));
+
+  const missingEvidence = validateSemanticReview({
+    mechanicalEvidence: { ...mechanicalEvidence, required_ci_green: false },
+    currentHeadSha: "abc123",
+    review: {
+      reviewer_id: "openclaw-reviewer-merge-captain",
+      pr_url: "https://github.com/Subconscious-ai/example/pull/1",
+      reviewed_sha: "abc123",
+      verdict: "pass",
+    },
+  });
+
+  assert.equal(missingEvidence.passed, false);
+  assert.ok(missingEvidence.errors.includes("mechanical_evidence_failed"));
 });

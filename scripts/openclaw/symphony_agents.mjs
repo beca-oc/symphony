@@ -117,6 +117,20 @@ export function validateReviewerEvidence(evidence) {
   return { passed: errors.length === 0, errors };
 }
 
+export function validateSemanticReview({ mechanicalEvidence, currentHeadSha, review }) {
+  const errors = [];
+  const mechanical = validateReviewerEvidence(mechanicalEvidence ?? {});
+
+  if (!mechanical.passed) errors.push("mechanical_evidence_failed");
+  if (!review?.reviewer_id) errors.push("missing_reviewer_id");
+  if (!review?.pr_url) errors.push("missing_review_pr_url");
+  if (!review?.reviewed_sha) errors.push("missing_reviewed_sha");
+  if (!["pass", "request_changes", "blocked"].includes(review?.verdict)) errors.push("invalid_review_verdict");
+  if (review?.reviewed_sha && currentHeadSha && review.reviewed_sha !== currentHeadSha) errors.push("stale_review_sha");
+
+  return { passed: errors.length === 0, errors };
+}
+
 export function mergeDecision({ riskTier, evidencePassed, semanticPassed, humanApproved = false }) {
   if (!evidencePassed) return { action: "block", reason: "mechanical_evidence_failed" };
   if (!semanticPassed) return { action: "block", reason: "semantic_review_failed" };

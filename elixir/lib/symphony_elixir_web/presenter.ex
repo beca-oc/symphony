@@ -21,7 +21,8 @@ defmodule SymphonyElixirWeb.Presenter do
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           codex_totals: codex_totals_payload(snapshot.codex_totals),
           rate_limits: snapshot.rate_limits,
-          completed_runs: completed_runs_payload()
+          completed_runs: completed_runs_payload(),
+          completed_runs_by_issue: completed_runs_by_issue_payload()
         }
 
       :timeout ->
@@ -130,13 +131,41 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Enum.map(&completed_run_payload/1)
   end
 
+  defp completed_runs_by_issue_payload do
+    RunTrace.recent(100)
+    |> Enum.map(&completed_run_payload/1)
+    |> Enum.group_by(&(&1.issue_identifier || "n/a"))
+    |> Enum.map(fn {issue_identifier, attempts} ->
+      latest = List.first(attempts) || %{}
+
+      %{
+        issue_identifier: issue_identifier,
+        latest_outcome: Map.get(latest, :outcome),
+        latest_failure_bucket: Map.get(latest, :failure_bucket),
+        latest_repair_packet: Map.get(latest, :repair_packet),
+        latest_semantic_review: Map.get(latest, :semantic_review),
+        merge_eligibility: Map.get(latest, :merge_eligibility),
+        attempts: attempts
+      }
+    end)
+  end
+
   defp completed_run_payload(entry) when is_map(entry) do
     %{
       issue_identifier: Map.get(entry, "issue_identifier"),
       outcome: Map.get(entry, "outcome"),
       failure_bucket: Map.get(entry, "failure_bucket"),
+      attempt_kind: Map.get(entry, "attempt_kind"),
+      attempt_number: Map.get(entry, "attempt_number"),
+      repair_of_trace_id: Map.get(entry, "repair_of_trace_id"),
       pr_url: Map.get(entry, "pr_url"),
       check_url: Map.get(entry, "check_url"),
+      failing_check_url: Map.get(entry, "failing_check_url"),
+      passing_check_url: Map.get(entry, "passing_check_url"),
+      repair_packet: Map.get(entry, "repair_packet"),
+      semantic_review: Map.get(entry, "semantic_review"),
+      reviewed_sha: Map.get(entry, "reviewed_sha"),
+      merge_eligibility: Map.get(entry, "merge_eligibility"),
       runtime_seconds: Map.get(entry, "runtime_seconds"),
       manual_rescue_count: Map.get(entry, "manual_rescue_count"),
       tokens: completed_run_tokens_payload(Map.get(entry, "tokens")),

@@ -28,7 +28,9 @@ hooks:
     set -eu
     git clone https://github.com/Subconscious-ai/market-ontology.git .
     git config core.hooksPath /dev/null || true
-    python3 -m venv .venv
+  before_run: |
+    set -eu
+    test -d .venv || python3 -m venv .venv
     .venv/bin/python -m pip install -e ".[dev]"
 validation:
   preflight: PYTHON=.venv/bin/python bash scripts/agent/preflight.sh
@@ -40,6 +42,27 @@ evidence_gate:
   github_required_checks: ["symphony-gate"]
   require_all_checks: true
   timeout_seconds: 1800
+repair:
+  max_attempts: 2
+  retryable_failure_buckets:
+    - validation_failed
+    - ci_failed
+    - ci_timeout
+    - git_push_failed
+    - missing_pr
+    - missing_label
+    - missing_workpad
+    - missing_pushed_sha
+    - pushed_sha_mismatch
+    - branch_mismatch
+    - missing_validation
+    - missing_deploy_evidence
+    - merge_conflict
+  terminal_failure_buckets:
+    - missing_secret
+    - auth_blocked
+    - unsafe_side_effect
+    - ambiguous_scope
 agent:
   max_concurrent_agents: 1
   max_turns: 1
@@ -70,7 +93,7 @@ No description provided.
 {% endif %}
 
 {% if issue.recent_harness_context %}
-Recent Symphony harness blocker context:
+Recent Symphony harness context:
 {{ issue.recent_harness_context }}
 {% endif %}
 
@@ -80,9 +103,9 @@ Worker contract:
 2. Work only in the provided repository copy.
 3. Do not call Linear tools, GitHub tools, `gh`, or `git push`.
 4. Do not create or update a Linear workpad comment.
-5. If this is `Rework` and the harness context names an existing `codex/{{ issue.identifier }}-...` branch, continue that branch; otherwise create a local branch named `codex/{{ issue.identifier }}-<short-slug>`.
+5. If this is `Rework`, treat the latest `## Symphony Repair Packet` as the binding scope. Continue the named `codex/{{ issue.identifier }}-...` branch and existing draft PR. Do not create a duplicate PR. If no branch is named, create `codex/{{ issue.identifier }}-<short-slug>`.
 6. Sync from `origin/main` before edits.
-7. Make the smallest scoped change; avoid unrelated refactors.
+7. Make the smallest scoped change that satisfies the ticket or repair packet; avoid unrelated refactors.
 8. Commit the local change with a clear message.
 9. Leave the workspace on the committed branch and stop.
 

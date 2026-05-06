@@ -143,7 +143,8 @@ defmodule SymphonyElixir.DeliveryPublisher do
 
   defp git_rebase_branch(workspace, branch) do
     case System.cmd("git", ["-C", workspace, "rebase", "origin/#{branch}"], stderr_to_stdout: true) do
-      {_output, 0} -> :ok
+      {_output, 0} ->
+        :ok
 
       {output, status} ->
         System.cmd("git", ["-C", workspace, "rebase", "--abort"], stderr_to_stdout: true)
@@ -323,12 +324,15 @@ defmodule SymphonyElixir.DeliveryPublisher do
             {:error, {:pr_checks_failed, failures}}
 
           {:pending, failures} ->
-            if System.monotonic_time(:millisecond) >= deadline do
-              {:error, {:pr_checks_timeout, failures}}
-            else
-              Process.sleep(evidence_poll_interval_ms())
-              poll_pr_with_evidence(repo, pr_url, evidence_required?, evidence_gate, deadline, pull_request)
-            end
+            handle_pending_pr_evidence(
+              repo,
+              pr_url,
+              evidence_required?,
+              evidence_gate,
+              deadline,
+              pull_request,
+              failures
+            )
         end
 
       {:error, _reason} = error ->
@@ -336,6 +340,15 @@ defmodule SymphonyElixir.DeliveryPublisher do
           nil -> error
           pull_request -> {:ok, pull_request}
         end
+    end
+  end
+
+  defp handle_pending_pr_evidence(repo, pr_url, evidence_required?, evidence_gate, deadline, pull_request, failures) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      {:error, {:pr_checks_timeout, failures}}
+    else
+      Process.sleep(evidence_poll_interval_ms())
+      poll_pr_with_evidence(repo, pr_url, evidence_required?, evidence_gate, deadline, pull_request)
     end
   end
 
@@ -400,7 +413,8 @@ defmodule SymphonyElixir.DeliveryPublisher do
       require_all_checks?(evidence_gate) ->
         check_state_failure(check, name)
 
-      configured_required_checks?(evidence_gate) and not check_configured?(name, evidence_gate.github_required_checks) ->
+      configured_required_checks?(evidence_gate) and
+          not check_configured?(name, evidence_gate.github_required_checks) ->
         nil
 
       true ->
@@ -472,12 +486,10 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp evidence_poll_timeout_ms(settings) do
-    cond do
-      is_integer(settings.evidence_gate.timeout_seconds) ->
-        settings.evidence_gate.timeout_seconds * 1_000
-
-      true ->
-        Application.get_env(:symphony_elixir, :delivery_publisher_poll_timeout_ms, 60_000)
+    if is_integer(settings.evidence_gate.timeout_seconds) do
+      settings.evidence_gate.timeout_seconds * 1_000
+    else
+      Application.get_env(:symphony_elixir, :delivery_publisher_poll_timeout_ms, 60_000)
     end
   end
 
