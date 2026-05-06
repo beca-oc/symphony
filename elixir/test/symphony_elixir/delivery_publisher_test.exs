@@ -138,6 +138,60 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     end
   end
 
+  test "publisher rebases and retries a Symphony-owned branch after non-fast-forward push rejection" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-publisher-non-ff-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace = Path.join(test_root, "workspace")
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "README.md"), "# publisher\n")
+      System.cmd("git", ["-C", workspace, "init", "-b", "codex/BEC-99-marker"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "publisher evidence"])
+      System.cmd("git", ["-C", workspace, "remote", "add", "origin", "https://github.com/Subconscious-ai/example.git"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repo_github_repo: "Subconscious-ai/example",
+        repo_default_branch: "main",
+        validation_fast: "printf 'fast validation passed\\n'",
+        validation_deploy_evidence: "github_checks",
+        validation_evidence_required: true
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-publish",
+        identifier: "BEC-99",
+        title: "Publish delivery",
+        state: "In Progress",
+        url: "https://linear.app/example/issue/BEC-99/publish-delivery"
+      }
+
+      with_fake_gh_and_git(fn log_path ->
+        System.put_env("GIT_PUSH_NON_FF_ONCE", "1")
+
+        assert {:ok, evidence} = DeliveryPublisher.publish(issue, workspace)
+        assert evidence.pr_url == "https://github.com/Subconscious-ai/example/pull/99"
+
+        log = File.read!(log_path)
+        assert length(Regex.scan(~r/push -u origin codex\/BEC-99-marker/, log)) == 2
+        assert log =~ "fetch origin codex/BEC-99-marker"
+        assert log =~ "rebase origin/codex/BEC-99-marker"
+      end)
+    after
+      System.delete_env("GIT_PUSH_NON_FF_ONCE")
+      File.rm_rf(test_root)
+    end
+  end
+
   test "publisher only waits for configured required GitHub checks" do
     test_root =
       Path.join(
@@ -485,6 +539,31 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
       shift
 
       if [ "$1" = "push" ]; then
+        if [ -n "$GIT_PUSH_NON_FF_ONCE" ]; then
+          counter="$COMMAND_LOG.push-count"
+          count=0
+          if [ -f "$counter" ]; then
+            count="$(cat "$counter")"
+          fi
+          count=$((count + 1))
+          printf '%s' "$count" > "$counter"
+
+          if [ "$count" -eq 1 ]; then
+            printf '%s\n' "To https://github.com/Subconscious-ai/example.git"
+            printf '%s\n' " ! [rejected]        codex/BEC-99-marker -> codex/BEC-99-marker (non-fast-forward)"
+            printf '%s\n' "error: failed to push some refs to 'https://github.com/Subconscious-ai/example.git'"
+            printf '%s\n' "hint: Updates were rejected because the tip of your current branch is behind"
+            exit 1
+          fi
+        fi
+        exit 0
+      fi
+
+      if [ "$1" = "fetch" ]; then
+        exit 0
+      fi
+
+      if [ "$1" = "rebase" ]; then
         exit 0
       fi
 
