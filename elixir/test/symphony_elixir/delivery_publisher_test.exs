@@ -255,6 +255,72 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     end
   end
 
+  test "publisher keeps polling when a transient failed status appears while checks are pending" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-publisher-transient-failure-#{System.unique_integer([:positive])}"
+      )
+
+    counter_path = Path.join(test_root, "gh-view-count")
+
+    old_timeout = Application.get_env(:symphony_elixir, :delivery_publisher_poll_timeout_ms)
+    old_interval = Application.get_env(:symphony_elixir, :delivery_publisher_poll_interval_ms)
+
+    try do
+      Application.put_env(:symphony_elixir, :delivery_publisher_poll_timeout_ms, 250)
+      Application.put_env(:symphony_elixir, :delivery_publisher_poll_interval_ms, 1)
+
+      workspace = Path.join(test_root, "workspace")
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "README.md"), "# publisher\n")
+      System.cmd("git", ["-C", workspace, "init", "-b", "codex/BEC-103-marker"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "publisher transient check evidence"])
+      System.cmd("git", ["-C", workspace, "remote", "add", "origin", "https://github.com/Subconscious-ai/example.git"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repo_github_repo: "Subconscious-ai/example",
+        repo_default_branch: "main",
+        validation_fast: "printf 'fast validation passed\\n'",
+        validation_deploy_evidence: "github_checks",
+        validation_evidence_required: true,
+        evidence_gate_github_required_checks: ["symphony-gate"],
+        evidence_gate_require_all_checks: true
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-publish",
+        identifier: "BEC-103",
+        title: "Publish transient check delivery",
+        state: "In Progress",
+        url: "https://linear.app/example/issue/BEC-103/publish-transient-check-delivery"
+      }
+
+      with_fake_gh_and_git(fn log_path ->
+        System.put_env("GH_VIEW_TRANSIENT_FAILURE", "1")
+        System.put_env("GH_VIEW_COUNTER", counter_path)
+
+        assert {:ok, evidence} = DeliveryPublisher.publish(issue, workspace)
+        assert evidence.deployment_url == "https://github.com/Subconscious-ai/example/actions/runs/99/job/100"
+
+        log = File.read!(log_path)
+        assert length(Regex.scan(~r/gh pr view https:\/\/github\.com\/Subconscious-ai\/example\/pull\/99/, log)) >= 3
+      end)
+    after
+      restore_app_env(:delivery_publisher_poll_timeout_ms, old_timeout)
+      restore_app_env(:delivery_publisher_poll_interval_ms, old_interval)
+      System.delete_env("GH_VIEW_TRANSIENT_FAILURE")
+      System.delete_env("GH_VIEW_COUNTER")
+      File.rm_rf(test_root)
+    end
+  end
+
   test "publisher does not duplicate an existing Codex workpad on resume" do
     test_root =
       Path.join(
@@ -445,6 +511,27 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     fi
 
     if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+      if [ -n "$GH_VIEW_TRANSIENT_FAILURE" ]; then
+        count=0
+        if [ -f "$GH_VIEW_COUNTER" ]; then
+          count="$(cat "$GH_VIEW_COUNTER")"
+        fi
+        count=$((count + 1))
+        printf '%s' "$count" > "$GH_VIEW_COUNTER"
+
+        if [ "$count" -lt 3 ]; then
+          cat <<'JSON'
+    {"url":"https://github.com/Subconscious-ai/example/pull/99","isDraft":true,"headRefOid":"ignored","labels":[{"name":"symphony"}],"statusCheckRollup":[{"__typename":"CheckRun","name":"symphony-gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/Subconscious-ai/example/actions/runs/99/job/100"},{"__typename":"CheckRun","name":"Analyze (actions)","status":"IN_PROGRESS","detailsUrl":"https://github.com/Subconscious-ai/example/actions/runs/99/job/101"},{"__typename":"StatusContext","context":"CodeQL","state":"FAILURE"}]}
+    JSON
+          exit 0
+        fi
+
+        cat <<'JSON'
+    {"url":"https://github.com/Subconscious-ai/example/pull/99","isDraft":true,"headRefOid":"ignored","labels":[{"name":"symphony"}],"statusCheckRollup":[{"__typename":"CheckRun","name":"symphony-gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/Subconscious-ai/example/actions/runs/99/job/100"},{"__typename":"CheckRun","name":"Analyze (actions)","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/Subconscious-ai/example/actions/runs/99/job/101"},{"__typename":"StatusContext","context":"CodeQL","state":"SUCCESS"}]}
+    JSON
+        exit 0
+      fi
+
       if [ -n "$GH_VIEW_ALL_CHECKS" ]; then
         count=0
         if [ -f "$GH_VIEW_COUNTER" ]; then

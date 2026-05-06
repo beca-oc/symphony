@@ -315,6 +315,9 @@ defmodule SymphonyElixir.DeliveryPublisher do
       not is_binary(deployment_url(pull_request)) ->
         {:pending, ["missing deployment/check evidence"]}
 
+      Enum.any?(failures, &pending_failure?/1) ->
+        {:pending, failures}
+
       Enum.any?(failures, &String.contains?(&1, "failed")) ->
         {:failed, failures}
 
@@ -330,6 +333,13 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp pr_evidence_state(_pull_request, true, _evidence_gate), do: {:pending, ["missing pull request evidence"]}
+
+  defp pending_failure?(failure) when is_binary(failure) do
+    failure = String.downcase(failure)
+    String.contains?(failure, "still pending") or String.contains?(failure, "missing required pr check")
+  end
+
+  defp pending_failure?(_failure), do: false
 
   defp check_failure(check, evidence_gate) when is_map(check) do
     name = check_name(check)
