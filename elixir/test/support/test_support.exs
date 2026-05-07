@@ -42,7 +42,9 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+          Application.delete_env(:symphony_elixir, :memory_tracker_comments)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+          Application.delete_env(:symphony_elixir, :merge_gate_command_runner)
           File.rm_rf(workflow_root)
         end)
 
@@ -111,6 +113,8 @@ defmodule SymphonyElixir.TestSupport do
           codex_approval_policy: %{reject: %{sandbox_approval: true, rules: true, mcp_elicitations: true}},
           codex_thread_sandbox: "workspace-write",
           codex_turn_sandbox_policy: nil,
+          codex_environment_allowlist: nil,
+          codex_required_environment: nil,
           codex_turn_timeout_ms: 3_600_000,
           codex_read_timeout_ms: 5_000,
           codex_stall_timeout_ms: 300_000,
@@ -148,6 +152,8 @@ defmodule SymphonyElixir.TestSupport do
     codex_approval_policy = Keyword.get(config, :codex_approval_policy)
     codex_thread_sandbox = Keyword.get(config, :codex_thread_sandbox)
     codex_turn_sandbox_policy = Keyword.get(config, :codex_turn_sandbox_policy)
+    codex_environment_allowlist = Keyword.get(config, :codex_environment_allowlist)
+    codex_required_environment = Keyword.get(config, :codex_required_environment)
     codex_turn_timeout_ms = Keyword.get(config, :codex_turn_timeout_ms)
     codex_read_timeout_ms = Keyword.get(config, :codex_read_timeout_ms)
     codex_stall_timeout_ms = Keyword.get(config, :codex_stall_timeout_ms)
@@ -189,6 +195,8 @@ defmodule SymphonyElixir.TestSupport do
         "  approval_policy: #{yaml_value(codex_approval_policy)}",
         "  thread_sandbox: #{yaml_value(codex_thread_sandbox)}",
         "  turn_sandbox_policy: #{yaml_value(codex_turn_sandbox_policy)}",
+        "  environment_allowlist: #{yaml_value(codex_environment_allowlist)}",
+        "  required_environment: #{yaml_value(codex_required_environment)}",
         "  turn_timeout_ms: #{yaml_value(codex_turn_timeout_ms)}",
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",

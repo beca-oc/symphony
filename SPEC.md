@@ -591,6 +591,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `codex.approval_policy`: Codex `AskForApproval` value, default implementation-defined
 - `codex.thread_sandbox`: Codex `SandboxMode` value, default implementation-defined
 - `codex.turn_sandbox_policy`: Codex `SandboxPolicy` value, default implementation-defined
+- `codex.environment_allowlist`: list of env names allowed into Codex, default non-secret runtime basics
+- `codex.required_environment`: list of env names that must be present before Codex starts, default `[]`
 - `codex.turn_timeout_ms`: integer, default `3600000`
 - `codex.read_timeout_ms`: integer, default `5000`
 - `codex.stall_timeout_ms`: integer, default `300000`
@@ -706,10 +708,11 @@ Tick sequence:
 
 1. Reconcile running issues.
 2. Run dispatch preflight validation.
-3. Fetch candidate issues from tracker using active states.
-4. Sort issues by dispatch priority.
-5. Dispatch eligible issues while slots remain.
-6. Notify observability/status consumers of state changes.
+3. Process tracker issues in the approval state `Merging` through the deterministic merge gate.
+4. Fetch candidate issues from tracker using active states.
+5. Sort issues by dispatch priority.
+6. Dispatch eligible issues while slots remain.
+7. Notify observability/status consumers of state changes.
 
 If per-tick validation fails, dispatch is skipped for that tick, but reconciliation still happens
 first.
@@ -720,12 +723,20 @@ An issue is dispatch-eligible only if all are true:
 
 - It has `id`, `identifier`, `title`, and `state`.
 - Its state is in `active_states` and not in `terminal_states`.
+- Its state is not a reserved non-worker handoff state such as `Human Review` or `Merging`.
 - It is not already in `running`.
 - It is not already in `claimed`.
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
 - Blocker rule for `Todo` state passes:
   - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
+- Readiness gate passes immediately before claim:
+  - A malformed issue MUST NOT launch a worker.
+  - The gate MUST check the issue body for the configured readiness contract, including repo/base
+    branch, risk tier, include/exclude scope, validation, deploy/check evidence, branch rule, and
+    exit policy.
+  - If readiness fails, the orchestrator SHOULD leave a precise tracker comment and move the issue
+    to a configured repair state such as `Rework`.
 
 Sorting order (stable intent):
 
@@ -1140,10 +1151,13 @@ An implementation MUST support these tracker adapter operations:
    - Return issues in configured active states for a configured project.
 
 2. `fetch_issues_by_states(state_names)`
-   - Used for startup terminal cleanup.
+   - Used for startup terminal cleanup and deterministic merge-gate polling.
 
 3. `fetch_issue_states_by_ids(issue_ids)`
    - Used for active-run reconciliation.
+
+4. `fetch_issue_comments(issue_id)`
+   - Used by deterministic gates that must verify tracker-posted evidence.
 
 ### 11.2 Query Semantics (Linear)
 
@@ -1199,15 +1213,18 @@ Orchestrator behavior on tracker errors:
 
 ### 11.5 Tracker Writes (Important Boundary)
 
-Symphony does not require first-class tracker write APIs in the orchestrator.
+Symphony may write tracker comments and states for mechanical orchestration gates.
 
-- Ticket mutations (state transitions, comments, PR metadata) are typically handled by the coding
-  agent using tools defined by the workflow prompt.
-- The service remains a scheduler/runner and tracker reader.
+- The orchestrator owns readiness, setup/preflight, validation/evidence, PR publication evidence,
+  deterministic merge gating, and state transitions caused by those gates.
+- The coding agent should not be required to mutate tracker state just to prove readiness or
+  publish delivery evidence.
+- A human may approve low-risk work with one tracker action: move the issue to `Merging`. The merge
+  decision after that MUST be deterministic code, not an LLM turn.
 - Workflow-specific success often means "reached the next handoff state" (for example
   `Human Review`) rather than tracker terminal state `Done`.
-- If the `linear_graphql` client-side tool extension is implemented, it is still part of the agent
-  toolchain rather than orchestrator business logic.
+- If the `linear_graphql` client-side tool extension is implemented, it is an optional workflow
+  tool for explicit task needs rather than the default control plane for orchestration gates.
 
 ## 12. Prompt Construction and Context Assembly
 
@@ -1981,6 +1998,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Dispatch sort order is priority then oldest creation time
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
+- Malformed active issue fails readiness, receives a precise blocker comment, and does not launch a
+  worker
+- Ready active issue may launch with compact start context in the prompt
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace

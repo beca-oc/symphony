@@ -192,20 +192,29 @@ defmodule SymphonyElixir.Codex.AppServer do
     if is_nil(executable) do
       {:error, :bash_not_found}
     else
-      port =
-        Port.open(
-          {:spawn_executable, String.to_charlist(executable)},
-          [
-            :binary,
-            :exit_status,
-            :stderr_to_stdout,
-            args: [~c"-lc", String.to_charlist(Config.settings!().codex.command)],
-            cd: String.to_charlist(workspace),
-            line: @port_line_bytes
-          ]
-        )
+      settings = Config.settings!()
 
-      {:ok, port}
+      case Config.missing_required_environment(settings) do
+        [] ->
+          port =
+            Port.open(
+              {:spawn_executable, String.to_charlist(executable)},
+              [
+                :binary,
+                :exit_status,
+                :stderr_to_stdout,
+                args: [~c"-lc", String.to_charlist(settings.codex.command)],
+                cd: String.to_charlist(workspace),
+                env: Config.codex_local_port_env(settings),
+                line: @port_line_bytes
+              ]
+            )
+
+          {:ok, port}
+
+        missing ->
+          {:error, {:missing_required_environment, missing}}
+      end
     end
   end
 
@@ -217,7 +226,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp remote_launch_command(workspace) when is_binary(workspace) do
     [
       "cd #{shell_escape(workspace)}",
-      "exec #{Config.settings!().codex.command}"
+      Config.codex_remote_exec_command(Config.settings!().codex.command)
     ]
     |> Enum.join(" && ")
   end
@@ -943,6 +952,16 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp handle_response(port, request_id, data, timeout_ms) do
     payload = to_string(data)
 
+    case Config.parse_missing_required_environment_marker(payload) do
+      {:ok, names} ->
+        {:error, {:missing_required_environment, names}}
+
+      :error ->
+        decode_response_line(port, request_id, payload, timeout_ms)
+    end
+  end
+
+  defp decode_response_line(port, request_id, payload, timeout_ms) do
     case Jason.decode(payload) do
       {:ok, %{"id" => ^request_id, "error" => error}} ->
         {:error, {:response_error, error}}

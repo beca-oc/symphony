@@ -2,6 +2,8 @@
 
 This directory contains the Elixir agent orchestration service that polls Linear, creates per-issue workspaces, and runs Codex in app-server mode.
 
+Linear issues may be written by humans, scripts, or any planning agent. Do not couple orchestration behavior to a named planner; Symphony's readiness gate is the enforcement boundary before Codex launches.
+
 ## Environment
 
 - Elixir: `1.19.x` (OTP 28) via `mise`.

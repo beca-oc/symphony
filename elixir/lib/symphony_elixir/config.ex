@@ -6,6 +6,8 @@ defmodule SymphonyElixir.Config do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Workflow
 
+  @missing_required_environment_marker "__SYMPHONY_MISSING_REQUIRED_ENV__:"
+
   @default_prompt_template """
   You are working on a Linear issue.
 
@@ -114,6 +116,72 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @spec missing_required_environment(Schema.t() | nil) :: [String.t()]
+  def missing_required_environment(settings \\ nil) do
+    settings = settings || settings!()
+
+    Enum.filter(settings.codex.required_environment, fn name ->
+      case System.get_env(name) do
+        nil -> true
+        "" -> true
+        _value -> false
+      end
+    end)
+  end
+
+  @spec codex_local_port_env(Schema.t() | nil) :: [{charlist(), charlist() | false}]
+  def codex_local_port_env(settings \\ nil) do
+    settings = settings || settings!()
+    allowlist = MapSet.new(settings.codex.environment_allowlist)
+    current_env = System.get_env()
+
+    unset_env =
+      current_env
+      |> Map.keys()
+      |> Enum.reject(&MapSet.member?(allowlist, &1))
+      |> Enum.map(&{String.to_charlist(&1), false})
+
+    preserved_env =
+      settings.codex.environment_allowlist
+      |> Enum.flat_map(fn name ->
+        case Map.fetch(current_env, name) do
+          {:ok, value} -> [{String.to_charlist(name), String.to_charlist(value)}]
+          :error -> []
+        end
+      end)
+
+    unset_env ++ preserved_env
+  end
+
+  @spec codex_remote_exec_command(String.t(), Schema.t() | nil) :: String.t()
+  def codex_remote_exec_command(command, settings \\ nil) when is_binary(command) do
+    settings = settings || settings!()
+
+    [
+      remote_required_environment_guard(settings.codex.required_environment),
+      remote_env_exec(command, settings.codex.environment_allowlist)
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join(" && ")
+  end
+
+  @spec parse_missing_required_environment_marker(String.t()) ::
+          {:ok, [String.t()]} | :error
+  def parse_missing_required_environment_marker(line) when is_binary(line) do
+    trimmed = String.trim(line)
+
+    if String.starts_with?(trimmed, @missing_required_environment_marker) do
+      names =
+        trimmed
+        |> String.replace_prefix(@missing_required_environment_marker, "")
+        |> String.split(",", trim: true)
+
+      {:ok, names}
+    else
+      :error
+    end
+  end
+
   defp validate_semantics(settings) do
     cond do
       is_nil(settings.tracker.kind) ->
@@ -130,6 +198,28 @@ defmodule SymphonyElixir.Config do
 
       true ->
         :ok
+    end
+  end
+
+  defp remote_required_environment_guard([]), do: ""
+
+  defp remote_required_environment_guard(names) when is_list(names) do
+    checks =
+      Enum.map_join(names, " ", fn name ->
+        "[ -z \"${#{name}-}\" ] && missing=\"${missing}${missing:+,}#{name}\";"
+      end)
+
+    "missing=''; #{checks} if [ -n \"$missing\" ]; then printf '%s%s\\n' '#{@missing_required_environment_marker}' \"$missing\"; exit 78; fi"
+  end
+
+  defp remote_env_exec(command, allowlist) do
+    assignments =
+      allowlist
+      |> Enum.map_join(" ", fn name -> "#{name}=\"${#{name}-}\"" end)
+
+    case assignments do
+      "" -> "exec env -i #{command}"
+      _ -> "exec env -i #{assignments} #{command}"
     end
   end
 

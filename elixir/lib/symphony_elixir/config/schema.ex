@@ -155,6 +155,9 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    @default_environment_allowlist ~w(PATH HOME TMPDIR USER LOGNAME SHELL LANG LC_ALL TERM)
+    @env_name_pattern ~r/^[A-Za-z_][A-Za-z0-9_]*$/
+
     @primary_key false
     embedded_schema do
       field(:command, :string, default: "codex app-server")
@@ -171,6 +174,8 @@ defmodule SymphonyElixir.Config.Schema do
 
       field(:thread_sandbox, :string, default: "workspace-write")
       field(:turn_sandbox_policy, :map)
+      field(:environment_allowlist, {:array, :string}, default: @default_environment_allowlist)
+      field(:required_environment, {:array, :string}, default: [])
       field(:turn_timeout_ms, :integer, default: 3_600_000)
       field(:read_timeout_ms, :integer, default: 5_000)
       field(:stall_timeout_ms, :integer, default: 300_000)
@@ -186,6 +191,8 @@ defmodule SymphonyElixir.Config.Schema do
           :approval_policy,
           :thread_sandbox,
           :turn_sandbox_policy,
+          :environment_allowlist,
+          :required_environment,
           :turn_timeout_ms,
           :read_timeout_ms,
           :stall_timeout_ms
@@ -193,9 +200,37 @@ defmodule SymphonyElixir.Config.Schema do
         empty_values: []
       )
       |> validate_required([:command])
+      |> update_change(:environment_allowlist, &normalize_env_names/1)
+      |> update_change(:required_environment, &normalize_env_names/1)
+      |> validate_env_names(:environment_allowlist)
+      |> validate_env_names(:required_environment)
       |> validate_number(:turn_timeout_ms, greater_than: 0)
       |> validate_number(:read_timeout_ms, greater_than: 0)
       |> validate_number(:stall_timeout_ms, greater_than_or_equal_to: 0)
+    end
+
+    defp normalize_env_names(values) when is_list(values) do
+      values
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+    end
+
+    defp normalize_env_names(values), do: values
+
+    defp validate_env_names(changeset, field) do
+      validate_change(changeset, field, fn ^field, values ->
+        invalid =
+          values
+          |> List.wrap()
+          |> Enum.reject(&(is_binary(&1) and Regex.match?(@env_name_pattern, &1)))
+
+        if invalid == [] do
+          []
+        else
+          [{field, "contains invalid environment names"}]
+        end
+      end)
     end
   end
 

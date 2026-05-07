@@ -13,18 +13,23 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 
 ## How it works
 
-1. Polls Linear for candidate work
-2. Creates a workspace per issue
-3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
+1. Polls Linear for candidate work prepared by a human, script, or planning agent
+2. Refuses malformed issues before claim with a precise Linear readiness comment
+3. Creates a workspace per ready issue
+4. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
-4. Sends a workflow prompt to Codex
-5. Keeps Codex working on the issue until the work is done
+5. Sends a compact workflow prompt to Codex
+6. Owns validation, evidence, PR publication, deterministic merge gating, and Linear state transitions
 
-During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
-skills can make raw Linear GraphQL calls.
+During app-server sessions, Symphony can serve a client-side `linear_graphql` tool for workflows
+that explicitly need raw Linear GraphQL access.
 
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.
+
+Human approval is a single Linear action: move a reviewed issue to `Merging`. Symphony then runs a
+deterministic merge gate, not Codex, and moves the issue to `Done` only after GitHub evidence passes
+and the PR merge succeeds.
 
 ## How to use it
 
@@ -42,6 +47,9 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
    - When creating a workflow based on this repo, note that it depends on non-standard Linear
      issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
      Team Settings → Workflow in Linear.
+   - Linear issues can come from any planner. Symphony enforces readiness before launching Codex.
+   - Do not include `Merging` in `tracker.active_states`; Symphony polls that state separately for
+     deterministic merge gating.
 6. Follow the instructions below to install the required runtime dependencies and start the service.
 
 ## Prerequisites
@@ -119,6 +127,14 @@ Notes:
 - When `codex.turn_sandbox_policy` is set explicitly, Symphony passes the map through to Codex
   unchanged. Compatibility then depends on the targeted Codex app-server version rather than local
   Symphony validation.
+- `codex.environment_allowlist` controls which environment variable names may reach Codex. The
+  default is non-secret runtime basics only: `PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`,
+  `LANG`, `LC_ALL`, and `TERM`.
+- `codex.required_environment` lists variable names that must be present before Codex starts. If any
+  are missing, Symphony comments on the Linear issue by name only, moves it to `Rework`, and does not
+  launch Codex.
+- GitHub, Linear, Vercel, and repo-specific secrets are not passed to Codex by default. Add only
+  ticket-safe names explicitly when a workflow needs them.
 - `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
@@ -143,6 +159,8 @@ hooks:
     git clone --depth 1 "$SOURCE_REPO_URL" .
 codex:
   command: "$CODEX_BIN --config 'model=\"gpt-5.5\"' app-server"
+  environment_allowlist: [PATH, HOME, TMPDIR, USER, LOGNAME, SHELL, LANG, LC_ALL, TERM]
+  required_environment: []
 ```
 
 - If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.
@@ -150,6 +168,11 @@ codex:
   reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
+- `Merging` is reserved for deterministic merge approval. When a low-risk issue is moved to
+  `Merging`, Symphony verifies the linked PR, branch, `symphony` label, current evidence SHA,
+  `symphony-gate`, required checks, and Vercel review target when the ticket requires Vercel, then
+  merges with `gh pr merge --squash --delete-branch`. If any gate fails, Symphony comments the
+  blocker and moves the issue back to `Human Review` or `Rework`.
 
 ## Web dashboard
 

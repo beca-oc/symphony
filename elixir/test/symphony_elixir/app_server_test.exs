@@ -1,6 +1,9 @@
 defmodule SymphonyElixir.AppServerTest do
   use SymphonyElixir.TestSupport
 
+  @default_codex_env_allowlist ~w(PATH HOME TMPDIR USER LOGNAME SHELL LANG LC_ALL TERM)
+  @trace_codex_env_allowlist @default_codex_env_allowlist ++ ["SYMP_TEST_CODEx_TRACE", "SYMP_TEST_CODex_TRACE"]
+
   test "app server rejects the workspace root and paths outside workspace root" do
     test_root =
       Path.join(
@@ -156,6 +159,7 @@ defmodule SymphonyElixir.AppServerTest do
         write_workflow_file!(Workflow.workflow_file_path(),
           workspace_root: workspace_root,
           codex_command: "#{codex_binary} app-server",
+          codex_environment_allowlist: @trace_codex_env_allowlist,
           codex_turn_sandbox_policy: configured_policy
         )
 
@@ -240,7 +244,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -303,7 +308,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -387,6 +393,7 @@ defmodule SymphonyElixir.AppServerTest do
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist,
         codex_approval_policy: "never"
       )
 
@@ -524,6 +531,7 @@ defmodule SymphonyElixir.AppServerTest do
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist,
         codex_approval_policy: "never"
       )
 
@@ -609,6 +617,7 @@ defmodule SymphonyElixir.AppServerTest do
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist,
         codex_approval_policy: "never"
       )
 
@@ -698,7 +707,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -798,7 +808,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -899,7 +910,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -1021,7 +1033,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -1111,7 +1124,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -1175,7 +1189,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -1250,7 +1265,8 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -1276,6 +1292,122 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "app server starts local Codex with only allowlisted environment names" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-env-#{System.unique_integer([:positive])}"
+      )
+
+    allowed_name = "SYMP_ALLOWED_ENV_#{System.unique_integer([:positive])}"
+    secret_name = "SYMP_SECRET_ENV_#{System.unique_integer([:positive])}"
+    previous_allowed = System.get_env(allowed_name)
+    previous_secret = System.get_env(secret_name)
+
+    on_exit(fn ->
+      restore_env(allowed_name, previous_allowed)
+      restore_env(secret_name, previous_secret)
+    end)
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-ENV")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex-env.trace")
+
+      File.mkdir_p!(workspace)
+      System.put_env(allowed_name, "allowed-value")
+      System.put_env(secret_name, "secret-value")
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      env | sort > "#{trace_file}"
+      count=0
+
+      while IFS= read -r line; do
+        count=$((count + 1))
+        case "$count" in
+          1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+          2) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-env"}}}' ;;
+          3) printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-env"}}}' ;;
+          4) printf '%s\\n' '{"method":"turn/completed"}'; exit 0 ;;
+          *) exit 0 ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @default_codex_env_allowlist ++ [allowed_name]
+      )
+
+      issue = %Issue{
+        id: "issue-env",
+        identifier: "MT-ENV",
+        title: "Validate env scrub",
+        description: "Ensure local codex receives only allowlisted env names",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-ENV",
+        labels: ["backend"]
+      }
+
+      assert {:ok, _result} = AppServer.run(workspace, "Validate env scrub", issue)
+
+      trace = File.read!(trace_file)
+      assert trace =~ "#{allowed_name}=allowed-value"
+      refute trace =~ secret_name
+      refute trace =~ "secret-value"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "app server fails before local Codex startup when required env is missing" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-required-env-#{System.unique_integer([:positive])}"
+      )
+
+    missing_name = "SYMP_MISSING_REQUIRED_#{System.unique_integer([:positive])}"
+    previous_missing = System.get_env(missing_name)
+    on_exit(fn -> restore_env(missing_name, previous_missing) end)
+    System.delete_env(missing_name)
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-REQ")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "should-not-start.trace")
+
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      printf started > "#{trace_file}"
+      exit 1
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        codex_required_environment: [missing_name]
+      )
+
+      assert {:error, {:missing_required_environment, [^missing_name]}} =
+               AppServer.start_session(workspace)
+
+      refute File.exists?(trace_file)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "app server launches over ssh for remote workers" do
     test_root =
       Path.join(
@@ -1285,10 +1417,12 @@ defmodule SymphonyElixir.AppServerTest do
 
     previous_path = System.get_env("PATH")
     previous_trace = System.get_env("SYMP_TEST_SSH_TRACE")
+    previous_remote_secret = System.get_env("SYMP_REMOTE_SECRET")
 
     on_exit(fn ->
       restore_env("PATH", previous_path)
       restore_env("SYMP_TEST_SSH_TRACE", previous_trace)
+      restore_env("SYMP_REMOTE_SECRET", previous_remote_secret)
     end)
 
     try do
@@ -1298,6 +1432,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.mkdir_p!(test_root)
       System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
+      System.put_env("SYMP_REMOTE_SECRET", "local-secret-value")
       System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
 
       File.write!(fake_ssh, """
@@ -1335,7 +1470,9 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: "/remote/workspaces",
-        codex_command: "fake-remote-codex app-server"
+        codex_command: "fake-remote-codex app-server",
+        codex_environment_allowlist: @default_codex_env_allowlist ++ ["SYMP_REMOTE_SECRET"],
+        codex_required_environment: ["SYMP_REMOTE_SECRET"]
       )
 
       issue = %Issue{
@@ -1363,6 +1500,10 @@ defmodule SymphonyElixir.AppServerTest do
       assert argv_line =~ "-T -p 2200 worker-01 bash -lc"
       assert argv_line =~ "cd "
       assert argv_line =~ remote_workspace
+      assert argv_line =~ "env -i"
+      assert argv_line =~ "SYMP_REMOTE_SECRET=\"${SYMP_REMOTE_SECRET-}\""
+      assert argv_line =~ "[ -z \"${SYMP_REMOTE_SECRET-}\" ]"
+      refute argv_line =~ "local-secret-value"
       assert argv_line =~ "exec "
       assert argv_line =~ "fake-remote-codex app-server"
 
@@ -1403,6 +1544,52 @@ defmodule SymphonyElixir.AppServerTest do
                  false
                end
              end)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "app server parses remote required-env marker as structured startup failure" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-remote-env-missing-#{System.unique_integer([:positive])}"
+      )
+
+    previous_path = System.get_env("PATH")
+    previous_trace = System.get_env("SYMP_TEST_SSH_TRACE")
+
+    on_exit(fn ->
+      restore_env("PATH", previous_path)
+      restore_env("SYMP_TEST_SSH_TRACE", previous_trace)
+    end)
+
+    try do
+      trace_file = Path.join(test_root, "ssh.trace")
+      fake_ssh = Path.join(test_root, "ssh")
+      remote_workspace = "/remote/workspaces/MT-REMOTE-MISSING"
+
+      File.mkdir_p!(test_root)
+      System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
+      System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
+
+      File.write!(fake_ssh, """
+      #!/bin/sh
+      printf 'ARGV:%s\\n' "$*" >> "${SYMP_TEST_SSH_TRACE:-/tmp/symphony-fake-ssh.trace}"
+      printf '%s\\n' '__SYMPHONY_MISSING_REQUIRED_ENV__:SYMP_REMOTE_REQUIRED'
+      exit 78
+      """)
+
+      File.chmod!(fake_ssh, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: "/remote/workspaces",
+        codex_command: "fake-remote-codex app-server",
+        codex_required_environment: ["SYMP_REMOTE_REQUIRED"]
+      )
+
+      assert {:error, {:missing_required_environment, ["SYMP_REMOTE_REQUIRED"]}} =
+               AppServer.start_session(remote_workspace, worker_host: "worker-01:2200")
     after
       File.rm_rf(test_root)
     end

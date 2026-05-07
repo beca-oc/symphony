@@ -20,6 +20,14 @@ defmodule SymphonyElixir.AgentRunner do
       :ok ->
         :ok
 
+      {:error, {:missing_required_environment, names}} ->
+        case block_for_missing_required_environment(issue, names) do
+          :ok -> :ok
+          {:error, reason} -> Logger.warning("Failed to record missing Codex env blocker for #{issue_context(issue)}: #{inspect(reason)}")
+        end
+
+        :ok
+
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
         raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
@@ -43,6 +51,24 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp block_for_missing_required_environment(%Issue{} = issue, names) when is_list(names) do
+    names = Enum.map(names, &to_string/1)
+
+    body = """
+    Codex setup is missing required environment variables, so Symphony did not start the agent.
+
+    Missing names:
+    #{Enum.map_join(names, "\n", &"- `#{&1}`")}
+
+    Add agent-safe values to the Symphony runtime or remove them from `codex.required_environment` if they are not needed for this ticket.
+    """
+
+    case Tracker.create_comment(issue.id, body) do
+      :ok -> Tracker.update_issue_state(issue.id, "Rework")
+      {:error, reason} -> {:error, reason}
     end
   end
 

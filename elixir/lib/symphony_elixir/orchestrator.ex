@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, MergeGate, StatusDashboard, TicketReadiness, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -224,53 +224,118 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_dispatch(%State{} = state) do
     state = reconcile_running_issues(state)
 
-    with :ok <- Config.validate!(),
-         {:ok, issues} <- Tracker.fetch_candidate_issues(),
-         true <- available_slots(state) > 0 do
-      choose_issues(issues, state)
-    else
-      {:error, :missing_linear_api_token} ->
-        Logger.error("Linear API token missing in WORKFLOW.md")
+    case Config.validate!() do
+      :ok ->
         state
-
-      {:error, :missing_linear_project_slug} ->
-        Logger.error("Linear project slug missing in WORKFLOW.md")
-        state
-
-      {:error, :missing_tracker_kind} ->
-        Logger.error("Tracker kind missing in WORKFLOW.md")
-
-        state
-
-      {:error, {:unsupported_tracker_kind, kind}} ->
-        Logger.error("Unsupported tracker kind in WORKFLOW.md: #{inspect(kind)}")
-
-        state
-
-      {:error, {:invalid_workflow_config, message}} ->
-        Logger.error("Invalid WORKFLOW.md config: #{message}")
-        state
-
-      {:error, {:missing_workflow_file, path, reason}} ->
-        Logger.error("Missing WORKFLOW.md at #{path}: #{inspect(reason)}")
-        state
-
-      {:error, :workflow_front_matter_not_a_map} ->
-        Logger.error("Failed to parse WORKFLOW.md: workflow front matter must decode to a map")
-        state
-
-      {:error, {:workflow_parse_error, reason}} ->
-        Logger.error("Failed to parse WORKFLOW.md: #{inspect(reason)}")
-        state
+        |> process_merge_candidates()
+        |> maybe_dispatch_worker_candidates()
 
       {:error, reason} ->
-        Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
-        state
+        log_config_validation_error(reason, state)
+    end
+  end
 
-      false ->
+  defp maybe_dispatch_worker_candidates(%State{} = state) do
+    if available_slots(state) > 0 do
+      case Tracker.fetch_candidate_issues() do
+        {:ok, issues} -> choose_issues(issues, state)
+        {:error, reason} -> log_tracker_fetch_error(reason, state)
+      end
+    else
+      state
+    end
+  end
+
+  defp log_config_validation_error(:missing_linear_api_token, state) do
+    Logger.error("Linear API token missing in WORKFLOW.md")
+    state
+  end
+
+  defp log_config_validation_error(:missing_linear_project_slug, state) do
+    Logger.error("Linear project slug missing in WORKFLOW.md")
+    state
+  end
+
+  defp log_config_validation_error(:missing_tracker_kind, state) do
+    Logger.error("Tracker kind missing in WORKFLOW.md")
+    state
+  end
+
+  defp log_config_validation_error({:unsupported_tracker_kind, kind}, state) do
+    Logger.error("Unsupported tracker kind in WORKFLOW.md: #{inspect(kind)}")
+    state
+  end
+
+  defp log_config_validation_error({:invalid_workflow_config, message}, state) do
+    Logger.error("Invalid WORKFLOW.md config: #{message}")
+    state
+  end
+
+  defp log_config_validation_error({:missing_workflow_file, path, reason}, state) do
+    Logger.error("Missing WORKFLOW.md at #{path}: #{inspect(reason)}")
+    state
+  end
+
+  defp log_config_validation_error(:workflow_front_matter_not_a_map, state) do
+    Logger.error("Failed to parse WORKFLOW.md: workflow front matter must decode to a map")
+    state
+  end
+
+  defp log_config_validation_error({:workflow_parse_error, reason}, state) do
+    Logger.error("Failed to parse WORKFLOW.md: #{inspect(reason)}")
+    state
+  end
+
+  defp log_config_validation_error(reason, state) do
+    Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
+    state
+  end
+
+  defp log_tracker_fetch_error(:missing_linear_api_token, state) do
+    Logger.error("Linear API token missing in WORKFLOW.md")
+    state
+  end
+
+  defp log_tracker_fetch_error(:missing_linear_project_slug, state) do
+    Logger.error("Linear project slug missing in WORKFLOW.md")
+    state
+  end
+
+  defp log_tracker_fetch_error(reason, state) do
+    Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
+    state
+  end
+
+  defp process_merge_candidates(%State{} = state) do
+    case Tracker.fetch_issues_by_states(["Merging"]) do
+      {:ok, issues} ->
+        Enum.reduce(issues, state, &process_merge_candidate/2)
+
+      {:error, reason} ->
+        Logger.error("Failed to fetch Merging issues: #{inspect(reason)}")
         state
     end
   end
+
+  defp process_merge_candidate(%Issue{} = issue, %State{} = state) do
+    if MapSet.member?(state.completed, issue.id) do
+      state
+    else
+      case MergeGate.run(issue) do
+        :ok ->
+          complete_issue(state, issue.id)
+
+        {:blocked, _state_name} ->
+          complete_issue(state, issue.id)
+
+        {:error, reason} ->
+          Logger.warning("Merge gate failed for #{issue_context(issue)}: #{inspect(reason)}")
+          state
+      end
+    end
+  end
+
+  defp process_merge_candidate(_issue, state), do: state
 
   defp reconcile_running_issues(%State{} = state) do
     state = reconcile_stalled_running_issues(state)
@@ -319,6 +384,12 @@ defmodule SymphonyElixir.Orchestrator do
   def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
       when is_function(issue_fetcher, 1) do
     revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set())
+  end
+
+  @doc false
+  @spec readiness_gate_for_test(Issue.t()) :: :ok | {:blocked, [String.t()]} | {:error, term()}
+  def readiness_gate_for_test(%Issue{} = issue) do
+    readiness_gate(issue)
   end
 
   @doc false
@@ -600,6 +671,7 @@ defmodule SymphonyElixir.Orchestrator do
        )
        when is_binary(id) and is_binary(identifier) and is_binary(title) and is_binary(state_name) do
     issue_routable_to_worker?(issue) and
+      worker_dispatch_state?(state_name) and
       active_issue_state?(state_name, active_states) and
       !terminal_issue_state?(state_name, terminal_states)
   end
@@ -611,6 +683,10 @@ defmodule SymphonyElixir.Orchestrator do
        do: assigned_to_worker
 
   defp issue_routable_to_worker?(_issue), do: true
+
+  defp worker_dispatch_state?(state_name) when is_binary(state_name) do
+    normalize_issue_state(state_name) not in ["human review", "merging"]
+  end
 
   defp todo_issue_blocked_by_non_terminal?(
          %Issue{state: issue_state, blocked_by: blockers},
@@ -660,7 +736,18 @@ defmodule SymphonyElixir.Orchestrator do
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
     case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
-        do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
+        case readiness_gate(refreshed_issue) do
+          :ok ->
+            do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
+
+          {:blocked, failures} ->
+            Logger.info("Skipping dispatch; issue failed readiness gate: #{issue_context(refreshed_issue)} failures=#{inspect(failures)}")
+            complete_issue(state, refreshed_issue.id)
+
+          {:error, reason} ->
+            Logger.warning("Skipping dispatch; readiness gate failed for #{issue_context(refreshed_issue)}: #{inspect(reason)}")
+            state
+        end
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
@@ -674,6 +761,30 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
         state
+    end
+  end
+
+  defp readiness_gate(%Issue{} = issue) do
+    case TicketReadiness.validate(issue, Config.settings!()) do
+      :ok ->
+        :ok
+
+      {:error, failures} ->
+        block_unready_issue(issue, failures)
+    end
+  end
+
+  defp block_unready_issue(%Issue{} = issue, failures) do
+    case Tracker.create_comment(issue.id, TicketReadiness.blocker_comment(issue, failures)) do
+      :ok -> move_unready_issue_to_rework(issue.id, failures)
+      {:error, reason} -> {:error, {:readiness_comment_failed, reason}}
+    end
+  end
+
+  defp move_unready_issue_to_rework(issue_id, failures) do
+    case Tracker.update_issue_state(issue_id, "Rework") do
+      :ok -> {:blocked, failures}
+      {:error, reason} -> {:error, {:readiness_state_update_failed, reason}}
     end
   end
 

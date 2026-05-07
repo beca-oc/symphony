@@ -755,6 +755,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            }
 
     assert config.codex.thread_sandbox == "workspace-write"
+    assert config.codex.environment_allowlist == ~w(PATH HOME TMPDIR USER LOGNAME SHELL LANG LC_ALL TERM)
+    assert config.codex.required_environment == []
+    refute "GITHUB_TOKEN" in config.codex.environment_allowlist
+    refute "LINEAR_API_KEY" in config.codex.environment_allowlist
 
     assert {:ok, canonical_default_workspace_root} =
              SymphonyElixir.PathSafety.canonicalize(Path.join(System.tmp_dir!(), "symphony_workspaces"))
@@ -885,6 +889,38 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex app-server")
     assert Config.settings!().codex.command == "codex app-server"
+  end
+
+  test "config normalizes codex env allowlist and required env by name only" do
+    env_name = "SYMP_REQUIRED_ENV_#{System.unique_integer([:positive])}"
+    previous_env = System.get_env(env_name)
+
+    on_exit(fn -> restore_env(env_name, previous_env) end)
+    System.delete_env(env_name)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_environment_allowlist: ["PATH", "PATH", " #{env_name} "],
+      codex_required_environment: [env_name, env_name]
+    )
+
+    config = Config.settings!()
+    assert config.codex.environment_allowlist == ["PATH", env_name]
+    assert config.codex.required_environment == [env_name]
+    assert Config.missing_required_environment() == [env_name]
+
+    System.put_env(env_name, "")
+    assert Config.missing_required_environment() == [env_name]
+
+    System.put_env(env_name, "present")
+    assert Config.missing_required_environment() == []
+
+    write_workflow_file!(Workflow.workflow_file_path(), codex_environment_allowlist: ["BAD-NAME"])
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "codex.environment_allowlist"
+
+    write_workflow_file!(Workflow.workflow_file_path(), codex_required_environment: ["1BAD"])
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "codex.required_environment"
   end
 
   test "config resolves $VAR references for env-backed secret and path values" do

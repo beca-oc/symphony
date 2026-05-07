@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.{Config, TicketReadiness, Workflow}
 
   @render_opts [strict_variables: true, strict_filters: true]
 
@@ -14,15 +14,36 @@ defmodule SymphonyElixir.PromptBuilder do
       |> prompt_template!()
       |> parse_template!()
 
-    template
-    |> Solid.render!(
-      %{
-        "attempt" => Keyword.get(opts, :attempt),
-        "issue" => issue |> Map.from_struct() |> to_solid_map()
-      },
-      @render_opts
-    )
-    |> IO.iodata_to_binary()
+    rendered_prompt =
+      template
+      |> Solid.render!(
+        %{
+          "attempt" => Keyword.get(opts, :attempt),
+          "issue" => issue |> Map.from_struct() |> to_solid_map()
+        },
+        @render_opts
+      )
+      |> IO.iodata_to_binary()
+
+    prepend_start_context(rendered_prompt, issue)
+  end
+
+  defp prepend_start_context(prompt, issue) do
+    settings = Config.settings!()
+
+    case TicketReadiness.validate(issue, settings) do
+      :ok ->
+        context = TicketReadiness.start_context(issue, settings)
+
+        if String.trim(context) == "" do
+          prompt
+        else
+          context <> "\n\n" <> prompt
+        end
+
+      {:error, _failures} ->
+        prompt
+    end
   end
 
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)

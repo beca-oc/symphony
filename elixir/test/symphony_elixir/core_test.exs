@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.CoreTest do
   use SymphonyElixir.TestSupport
 
+  @trace_codex_env_allowlist ~w(PATH HOME TMPDIR USER LOGNAME SHELL LANG LC_ALL TERM SYMP_TEST_CODEx_TRACE SYMP_TEST_CODex_TRACE)
+
   test "config defaults and validation checks" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
@@ -428,6 +430,134 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "Merging issues never dispatch to Codex workers" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Merging"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue = %Issue{
+      id: "issue-merging",
+      identifier: "BEC-201",
+      title: "Approved merge",
+      state: "Merging",
+      description: "Merge approved work."
+    }
+
+    state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{},
+      max_concurrent_agents: 1
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "poll cycle merges approved low-risk Merging issues without launching Codex" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+      poll_interval_ms: 30_000,
+      max_concurrent_agents: 1
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    issue = %Issue{
+      id: "issue-merge-gate",
+      identifier: "BEC-202",
+      title: "Approved deterministic merge",
+      state: "Merging",
+      description: """
+      ## Goal
+      Merge approved work.
+
+      ## Repo
+      repo: market-ontology
+      base branch: main
+      branch rule: codex/BEC-202-approved-deterministic-merge
+
+      ## Risk Tier
+      low
+
+      ## Scope
+      Include: merge approved work.
+      Exclude: product behavior.
+
+      ## Acceptance
+      Merge only after checks pass.
+
+      ## Validation
+      bash scripts/agent/validate-fast.sh
+
+      ## Deploy / Check Evidence
+      GitHub Actions check.
+
+      ## Exit Policy
+      Human moves to Merging; Symphony moves to Done after merge.
+      """
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+    Application.put_env(:symphony_elixir, :memory_tracker_comments, %{
+      "issue-merge-gate" => [
+        """
+        ## Symphony Evidence Gate
+        Result: passed
+        Branch: codex/BEC-202-approved-deterministic-merge
+        Commit: cccccccccccccccccccccccccccccccccccccccc
+        PR: https://github.com/acme/repo/pull/22
+        Deployment/Check: https://github.com/acme/repo/actions/runs/2/job/1
+        """
+      ]
+    })
+
+    Application.put_env(:symphony_elixir, :merge_gate_command_runner, fn
+      "gh", ["pr", "view", _pr_url, "--json", _fields] ->
+        {Jason.encode!(%{
+           "headRefName" => "codex/BEC-202-approved-deterministic-merge",
+           "headRefOid" => "cccccccccccccccccccccccccccccccccccccccc",
+           "isDraft" => false,
+           "labels" => [%{"name" => "symphony"}],
+           "statusCheckRollup" => [
+             %{
+               "__typename" => "CheckRun",
+               "name" => "symphony-gate",
+               "status" => "COMPLETED",
+               "conclusion" => "SUCCESS"
+             }
+           ],
+           "url" => "https://github.com/acme/repo/pull/22"
+         }), 0}
+
+      "gh", ["pr", "merge", _pr_url, "--squash", "--delete-branch"] ->
+        {"Merged pull request #22", 0}
+    end)
+
+    orchestrator_name = Module.concat(__MODULE__, :MergeGateOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :merge_gate_command_runner)
+
+      if Process.alive?(pid), do: Process.exit(pid, :normal)
+    end)
+
+    send(pid, :tick)
+
+    assert_receive {:memory_tracker_comment, "issue-merge-gate", body}, 1_000
+    assert body =~ "## Symphony Merge Gate"
+    assert body =~ "Result: merged"
+    assert_receive {:memory_tracker_state_update, "issue-merge-gate", "Done"}, 1_000
+
+    state = :sys.get_state(pid)
+    assert state.running == %{}
+  end
+
   test "reconcile updates running issue state for active issues" do
     issue_id = "issue-3"
 
@@ -543,6 +673,7 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    scheduled_from_ms = System.monotonic_time(:millisecond)
     send(pid, {:DOWN, ref, :process, self(), :normal})
     Process.sleep(50)
     state = :sys.get_state(pid)
@@ -551,7 +682,7 @@ defmodule SymphonyElixir.CoreTest do
     assert MapSet.member?(state.completed, issue_id)
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
-    assert_due_in_range(due_at_ms, 500, 1_100)
+    assert_due_after(due_at_ms, scheduled_from_ms, 950, 1_500)
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -584,6 +715,7 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    scheduled_from_ms = System.monotonic_time(:millisecond)
     send(pid, {:DOWN, ref, :process, self(), :boom})
     Process.sleep(50)
     state = :sys.get_state(pid)
@@ -591,7 +723,7 @@ defmodule SymphonyElixir.CoreTest do
     assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 39_500, 40_500)
+    assert_due_after(due_at_ms, scheduled_from_ms, 39_500, 42_000)
   end
 
   test "first abnormal worker exit waits before retrying" do
@@ -623,6 +755,7 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    scheduled_from_ms = System.monotonic_time(:millisecond)
     send(pid, {:DOWN, ref, :process, self(), :boom})
     Process.sleep(50)
     state = :sys.get_state(pid)
@@ -630,7 +763,7 @@ defmodule SymphonyElixir.CoreTest do
     assert %{attempt: 1, due_at_ms: due_at_ms, identifier: "MT-560", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 9_000, 10_500)
+    assert_due_after(due_at_ms, scheduled_from_ms, 9_500, 11_500)
   end
 
   test "stale retry timer messages do not consume newer retry entries" do
@@ -750,11 +883,11 @@ defmodule SymphonyElixir.CoreTest do
     assert Orchestrator.select_worker_host_for_test(state, "worker-a") == "worker-a"
   end
 
-  defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
-    remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
+  defp assert_due_after(due_at_ms, scheduled_from_ms, min_delay_ms, max_delay_ms) do
+    scheduled_delay_ms = due_at_ms - scheduled_from_ms
 
-    assert remaining_ms >= min_remaining_ms
-    assert remaining_ms <= max_remaining_ms
+    assert scheduled_delay_ms >= min_delay_ms
+    assert scheduled_delay_ms <= max_delay_ms
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
@@ -967,9 +1100,8 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd"
     assert prompt =~ "This is an unattended orchestration session."
     assert prompt =~ "Only stop early for a true blocker"
+    assert prompt =~ "Symphony owns validation, push, PR publication, evidence, and Linear state transitions."
     assert prompt =~ "Do not include \"next steps for user\""
-    assert prompt =~ "open and follow `.codex/skills/land/SKILL.md`"
-    assert prompt =~ "Do not call `gh pr merge` directly"
     assert prompt =~ "Continuation context:"
     assert prompt =~ "retry attempt #2"
   end
@@ -1295,6 +1427,7 @@ defmodule SymphonyElixir.CoreTest do
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist,
         max_turns: 3
       )
 
@@ -1425,6 +1558,7 @@ defmodule SymphonyElixir.CoreTest do
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist,
         max_turns: 2
       )
 
@@ -1522,7 +1656,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -1666,7 +1801,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} --config 'model=\"gpt-5.5\"' app-server"
+        codex_command: "#{codex_binary} --config 'model=\"gpt-5.5\"' app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist
       )
 
       issue = %Issue{
@@ -1756,6 +1892,7 @@ defmodule SymphonyElixir.CoreTest do
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
+        codex_environment_allowlist: @trace_codex_env_allowlist,
         codex_approval_policy: "on-request",
         codex_thread_sandbox: "workspace-write",
         codex_turn_sandbox_policy: %{

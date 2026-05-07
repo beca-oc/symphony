@@ -192,6 +192,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues()
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["issue-1"])
+    Application.put_env(:symphony_elixir, :memory_tracker_comments, %{"issue-1" => ["comment"]})
+    assert {:ok, ["comment"]} = SymphonyElixir.Tracker.fetch_issue_comments("issue-1")
     assert :ok = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
     assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
@@ -216,6 +218,20 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(["issue-1"])
     assert_receive {:fetch_issue_states_by_ids_called, ["issue-1"]}
+
+    Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok,
+       %{
+         "data" => %{
+           "issue" => %{"comments" => %{"nodes" => [%{"body" => "hello"}, %{"body" => nil}]}}
+         }
+       }}
+    )
+
+    assert {:ok, ["hello"]} = Adapter.fetch_issue_comments("issue-1")
+    assert_receive {:graphql_called, comments_query, %{issueId: "issue-1"}}
+    assert comments_query =~ "comments"
 
     Process.put(
       {FakeLinearClient, :graphql_result},
