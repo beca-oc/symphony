@@ -25,7 +25,11 @@ On May 5, 2026, all four repos passed Level 0 Symphony proof canaries from fresh
 
 This proves small static delivery. It does not prove multi-day autonomous engineering.
 
-OpenClaw should use `docs/openclaw-symphony-agents.md` for the Product Engineer and Reviewer/Merge Captain agent contracts. The Product Engineer creates bounded, dependency-aware Linear issues. The Reviewer/Merge Captain checks deterministic Symphony evidence first, then semantic risk, then applies the merge policy.
+Use `docs/codex-symphony-operating-contract.md` as the standing contract for planning and
+execution. Codex reduces ambiguous work into bounded Linear tickets; Symphony executes prepared
+tickets through isolated workspaces, draft PRs, deterministic evidence, and `Human Review` or
+`Rework`. External agent shells may help with planning or review, but they are optional and must not
+replace the Linear/GitHub/Symphony evidence path.
 
 ## Subconscious.ai Harness Best Practice
 
