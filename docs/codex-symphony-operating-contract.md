@@ -1,11 +1,16 @@
-# Codex To Symphony Operating Contract
+# Agent To Symphony Operating Contract
 
-Codex plans. Symphony executes.
+Engineering agents plan. Symphony executes prepared Linear tickets.
 
-This is the default operating model for Subconscious.ai harness engineering. OpenClaw, Hermes,
-Pi, or any other agent shell can help with planning or review, but none of them is required for
-Symphony work. The durable system of record is Linear, GitHub, Symphony traces, and repo-owned
-validation.
+This is the default operating model for Subconscious.ai harness engineering. Codex, Claude, Gemini,
+OpenClaw, Hermes, Pi, or any other agent shell can help with planning, implementation, or review
+when explicitly asked, but none of those shells is the durable control plane. The durable system of
+record is Linear, GitHub, Symphony traces, and repo-owned validation.
+
+This Symphony implementation currently launches workers through Codex app-server. Claude and Gemini
+should still read the same repo instructions and can prepare tickets, review output, or perform
+normal non-Symphony engineering work, but Symphony-executed runs use the configured Codex worker
+runtime unless a future worker adapter is added.
 
 ## When To Use Symphony
 
@@ -21,12 +26,12 @@ Use Symphony when the work is queued, bounded, and evidence-heavy:
   failures, never worker-authored `Done`.
 
 Do not use Symphony for vague discovery, product judgment, open-ended debugging, or work that
-cannot name its validation and evidence path. Keep that work in Codex planning until it becomes a
-bounded Linear ticket.
+cannot name its validation and evidence path. Keep that work in the planning agent until it becomes
+a bounded Linear ticket.
 
 ## Division Of Labor
 
-Codex owns:
+The planning agent owns:
 
 - Inspecting repos and existing behavior.
 - Decomposing ambiguous work.
@@ -38,7 +43,7 @@ Symphony owns:
 
 - Claiming the prepared Linear issue.
 - Creating the isolated workspace.
-- Running the constrained Codex worker.
+- Running the constrained Codex app-server worker.
 - Validating after worker exit.
 - Pushing the branch and opening a draft PR.
 - Adding the `symphony` PR label.
@@ -66,18 +71,19 @@ It must also state the branch rule `codex/<issue-id>-<short-slug>` and require t
 
 ## Portable Instruction Block
 
-Use this block in global Codex instructions and repo `AGENTS.md` files:
+Use this block in global agent instructions, repo `AGENTS.md`, and thin vendor pointers such as
+`CLAUDE.md` or `GEMINI.md`:
 
 ```md
-Codex plans. Symphony executes.
+Engineering agents plan. Symphony executes prepared Linear tickets.
 
 Only hand work to Symphony after it is queued, bounded, and evidence-heavy in Linear. A
 Symphony-ready issue must name repo, base branch, risk tier, include/exclude scope, validation,
 deploy/check evidence, branch rule, and exit policy.
 
-Keep ambiguous discovery in Codex. Symphony should claim prepared issues, create isolated
-workspaces, run constrained Codex workers, validate, push, open draft PRs, record evidence, and move
-issues only to Human Review or Rework.
+Keep ambiguous discovery in the planning agent. Symphony should claim prepared issues, create
+isolated workspaces, run constrained Codex app-server workers, validate, push, open draft PRs,
+record evidence, and move issues only to Human Review or Rework.
 
 Never let a worker mark work Done, merge, promote, delete workspaces, or substitute model review for
 mechanical evidence.

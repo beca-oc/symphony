@@ -2,9 +2,13 @@
 
 Use `rtk` before local shell commands in this repository.
 
-Codex plans. Symphony executes.
+Codex, Claude, and Gemini may all be used as engineering agents in Subconscious.ai repos. This file
+is the canonical repo instruction entrypoint; vendor-specific files such as `CLAUDE.md` or
+`GEMINI.md` should point here instead of duplicating the contract.
 
-Keep ambiguous discovery, product judgment, and open-ended debugging in Codex. Hand work to
+Engineering agents plan. Symphony executes prepared Linear tickets.
+
+Keep ambiguous discovery, product judgment, and open-ended debugging in the planning agent. Hand work to
 Symphony only after the Linear issue is queued, bounded, and evidence-heavy.
 
 A Symphony-ready issue must name:
@@ -17,7 +21,7 @@ A Symphony-ready issue must name:
 - branch rule `codex/<issue-id>-<short-slug>`;
 - exit policy.
 
-Symphony owns isolated workspaces, constrained Codex worker execution, validation, draft PR
+Symphony currently owns isolated workspaces, constrained Codex app-server worker execution, validation, draft PR
 publication, `symphony` labeling, evidence recording, trace metrics, and moving Linear issues only
 to `Human Review` or `Rework`.
 

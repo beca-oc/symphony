@@ -26,11 +26,12 @@ skills can make raw Linear GraphQL calls.
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.
 
-For Subconscious.ai harness engineering, use the Codex-to-Symphony contract in
+For Subconscious.ai harness engineering, use the agent-to-Symphony contract in
 [`docs/codex-symphony-operating-contract.md`](../docs/codex-symphony-operating-contract.md):
-Codex plans and scopes work into ready Linear tickets; Symphony executes those prepared tickets and
-owns workspace isolation, validation, draft PR evidence, trace metrics, and Linear state
-transitions.
+Codex, Claude, Gemini, or another explicitly chosen engineering agent plans and scopes work into
+ready Linear tickets; Symphony executes those prepared tickets through the configured Codex
+app-server worker and owns workspace isolation, validation, draft PR evidence, trace metrics, and
+Linear state transitions.
 
 ## How to use it
 

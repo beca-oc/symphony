@@ -26,10 +26,11 @@ On May 5, 2026, all four repos passed Level 0 Symphony proof canaries from fresh
 This proves small static delivery. It does not prove multi-day autonomous engineering.
 
 Use `docs/codex-symphony-operating-contract.md` as the standing contract for planning and
-execution. Codex reduces ambiguous work into bounded Linear tickets; Symphony executes prepared
-tickets through isolated workspaces, draft PRs, deterministic evidence, and `Human Review` or
-`Rework`. External agent shells may help with planning or review, but they are optional and must not
-replace the Linear/GitHub/Symphony evidence path.
+execution. Codex, Claude, Gemini, or another explicitly chosen engineering agent can reduce
+ambiguous work into bounded Linear tickets; Symphony executes prepared tickets through isolated
+Codex app-server workspaces, draft PRs, deterministic evidence, and `Human Review` or `Rework`.
+External agent shells may help with planning or review, but they are optional and must not replace
+the Linear/GitHub/Symphony evidence path.
 
 ## Subconscious.ai Harness Best Practice
 
