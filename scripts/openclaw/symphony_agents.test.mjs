@@ -61,6 +61,102 @@ Move to Rework.
   assert.ok(result.errors.includes("missing_symphony_gate"));
 });
 
+test("Symphony tickets must be queued, bounded, and evidence-heavy", () => {
+  const result = validateTicket(`## Goal
+Change a docs marker.
+
+## Repo
+- Project/repo: ai-chatbot
+- GitHub repo: Subconscious-ai/ai-chatbot
+
+## Risk Tier
+- Tier: static
+
+## Scope
+docs only
+
+## Acceptance
+- Draft PR exists from codex/<issue-id>-<short-slug>.
+
+## Validation
+- Fast: bash scripts/agent/validate-fast.sh
+
+## Deploy / Check Evidence
+- Required check: symphony-gate
+
+## Failure Handling
+- Move to Rework.
+`);
+
+  assert.equal(result.passed, false);
+  assert.ok(result.errors.includes("missing_queue"));
+  assert.ok(result.errors.includes("missing_boundaries"));
+  assert.ok(result.errors.includes("missing_evidence"));
+  assert.ok(result.errors.includes("missing_exit_policy"));
+  assert.ok(result.errors.includes("missing_queue_state"));
+  assert.ok(result.errors.includes("missing_include_boundary"));
+  assert.ok(result.errors.includes("missing_exclude_boundary"));
+  assert.ok(result.errors.includes("missing_workpad_requirement"));
+  assert.ok(result.errors.includes("missing_evidence_gate_requirement"));
+});
+
+test("complete Symphony tickets pass task intake validation", () => {
+  const result = validateTicket(`## Goal
+Add a small static docs marker.
+
+## Queue
+- Linear project: ai-chatbot
+- Active state: Todo
+
+## Repo
+- Project/repo: ai-chatbot
+- GitHub repo: Subconscious-ai/ai-chatbot
+- Base branch: main
+
+## Risk Tier
+- Tier: static
+- Merge policy: Human Review required
+
+## Scope
+Docs-only marker.
+
+## Boundaries
+- Include:
+  - docs/agent-harness.md
+- Exclude:
+  - product behavior
+  - auth
+  - migrations
+
+## Acceptance
+- Draft PR exists from codex/<issue-id>-<short-slug>.
+- PR has label symphony.
+- Linear has ## Codex Workpad.
+- Linear has ## Symphony Evidence Gate.
+
+## Validation
+- Preflight: bash scripts/agent/preflight.sh
+- Fast: bash scripts/agent/validate-fast.sh
+
+## Evidence
+- PR URL, pushed SHA, validation result, and check/deploy URL are recorded.
+- Failure bucket is none.
+
+## Deploy / Check Evidence
+- Required check: symphony-gate
+- Deploy evidence: GitHub Actions
+
+## Exit Policy
+- Move to Human Review only after Symphony Evidence Gate passes.
+- Never mark Done from the worker.
+
+## Failure Handling
+- If validation, CI, merge, credentials, or deploy evidence fail, move to Rework with the failure bucket.
+`);
+
+  assert.deepEqual(result, { passed: true, errors: [] });
+});
+
 test("Reviewer evidence rejects Linear URLs as check evidence", () => {
   const result = validateReviewerEvidence({
     linear_has_workpad: true,

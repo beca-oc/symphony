@@ -28,12 +28,16 @@ export const allowedSystems = {
 
 const requiredTicketSections = [
   "Goal",
+  "Queue",
   "Repo",
   "Risk Tier",
   "Scope",
+  "Boundaries",
   "Acceptance",
   "Validation",
+  "Evidence",
   "Deploy / Check Evidence",
+  "Exit Policy",
   "Failure Handling",
 ];
 
@@ -86,6 +90,14 @@ export function validateTicket(ticketMarkdown) {
   for (const section of requiredTicketSections) {
     const pattern = new RegExp(`(^|\\n)## ${escapeRegExp(section)}(\\n|$)`);
     if (!pattern.test(ticketMarkdown)) errors.push(`missing_${slug(section)}`);
+  }
+  if (!/Linear project|Project\/repo|Project:/i.test(ticketMarkdown)) errors.push("missing_linear_project");
+  if (!/state:\s*(Todo|Rework|In Progress|Merging)/i.test(ticketMarkdown)) errors.push("missing_queue_state");
+  if (!/Include:/i.test(ticketMarkdown)) errors.push("missing_include_boundary");
+  if (!/Exclude:/i.test(ticketMarkdown)) errors.push("missing_exclude_boundary");
+  if (!/Linear has `## Codex Workpad`|## Codex Workpad/i.test(ticketMarkdown)) errors.push("missing_workpad_requirement");
+  if (!/Linear has `## Symphony Evidence Gate`|## Symphony Evidence Gate/i.test(ticketMarkdown)) {
+    errors.push("missing_evidence_gate_requirement");
   }
   if (!/codex\/<issue-id>-<short-slug>|codex\/[A-Z]+-\d+-/.test(ticketMarkdown)) {
     errors.push("missing_codex_branch_rule");
@@ -207,7 +219,10 @@ Authority: create bounded Linear tickets for Symphony-managed engineering.
 Rules:
 - Do not write product code.
 - Do not merge PRs.
-- Every Symphony ticket needs repo, risk tier, scope, validation, evidence, dependencies, and failure handling.
+- Every Symphony ticket must be queued, bounded, and evidence-heavy before it enters a Symphony-active state.
+- Queue means one Linear issue in one repo-mapped project with an explicit active state.
+- Bounded means explicit include/exclude scope, risk tier, validation ladder, dependencies, and non-goals.
+- Evidence-heavy means required workpad, evidence gate, branch, draft PR, label, SHA, validation, CI/deploy URL, and final state.
 - Candidate repos require harness bootstrap before product work.
 - Cross-repo work becomes one parent issue plus ordered child issues.
 - Record OpenClaw task id, session id, and trajectory path for detached or disputed runs.

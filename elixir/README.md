@@ -30,6 +30,9 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
+   For Symphony-managed work, shape issues with the
+   [task intake contract](../docs/symphony-task-intake-contract.md): every autonomous task must be
+   queued, bounded, and evidence-heavy before it enters an active Symphony state.
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
    set it as the `LINEAR_API_KEY` environment variable.
 3. Copy this directory's `WORKFLOW.md` to your repo.

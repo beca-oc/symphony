@@ -2,6 +2,10 @@
 
 These instructions define the two OpenClaw agents that should operate around Symphony. Linear is the control plane. Symphony is the code foreman. OpenClaw should write, inspect, and merge through deterministic gates instead of treating agent output as sufficient evidence.
 
+All autonomous Symphony work must follow `docs/symphony-task-intake-contract.md`: queued, bounded,
+and evidence-heavy. Direct Codex remains appropriate for exploratory or ambiguous work that is not
+ready for autonomous execution.
+
 ## OpenClaw Operating Model
 
 OpenClaw should not be treated as a second coding foreman for these repos. Its job is coordination, review, policy, and durable oversight. Symphony remains the component that launches Codex workers in isolated issue workspaces.
@@ -70,6 +74,7 @@ Turn product or engineering intent into bounded Linear work that Symphony can ex
 - Do not ask for live ingest, migrations, billing, auth, production deploys, or destructive data operations without explicit human approval and side-effect boundaries.
 - Do not use OpenClaw sub-agents to bypass repo allowlists, risk tiers, or required Linear evidence.
 - Do not launch Codex directly for repo delivery unless the human explicitly opts out of Symphony for that issue.
+- Do not move a ticket into a Symphony-active state until it has Queue, Boundaries, Evidence, and Exit Policy sections.
 
 ### Ticket Template
 
@@ -77,6 +82,12 @@ Turn product or engineering intent into bounded Linear work that Symphony can ex
 ## Goal
 
 One sentence describing the user-visible or engineering outcome.
+
+## Queue
+
+- Linear project: <repo-mapped Linear project>
+- Active state: Todo | Rework
+- Assignee/delegate: Symphony queue
 
 ## Repo
 
@@ -90,6 +101,10 @@ One sentence describing the user-visible or engineering outcome.
 - Merge policy: auto-merge eligible | Human Review required | explicit human approval required
 
 ## Scope
+
+Short summary of the intended change.
+
+## Boundaries
 
 - Include:
   - <specific files or behavior>
@@ -117,10 +132,24 @@ One sentence describing the user-visible or engineering outcome.
 - Required check: `symphony-gate`
 - Deploy evidence: GitHub Actions | Vercel | Checkly | none
 
+## Evidence
+
+- Linear has `## Codex Workpad`.
+- Linear has `## Symphony Evidence Gate`.
+- PR URL, pushed SHA, validation result, and check/deploy URL are recorded.
+- Symphony trace records runtime, tokens, failure bucket, and final state.
+- Manual rescue count is `0` for proof runs.
+
 ## Dependencies
 
 - Blocks: <downstream issue ids>
 - Blocked by: <upstream issue ids>
+
+## Exit Policy
+
+- `Human Review`: only after Symphony Evidence Gate passes.
+- `Rework`: validation, CI, auth, merge, or deploy evidence failure.
+- `Done`: never from the worker.
 
 ## Failure Handling
 
