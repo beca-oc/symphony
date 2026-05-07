@@ -49,6 +49,7 @@ start_runner "design-system" 4005 "workflows/design-system.md"
 start_runner "causalactions" 4006 "workflows/causalactions.md"
 start_runner "causalflow" 4007 "workflows/causalflow.md"
 start_runner "causalintelligence" 4008 "workflows/causalintelligence.md"
+start_runner "johnny-5-rebuild" 4009 "workflows/johnny-5-rebuild.md"
 
 screen -ls || true
 
@@ -59,4 +60,5 @@ Dashboards:
 - causalactions      http://127.0.0.1:4006/
 - causalflow         http://127.0.0.1:4007/
 - causalintelligence http://127.0.0.1:4008/
+- johnny-5-rebuild   http://127.0.0.1:4009/
 EOF

@@ -11,6 +11,7 @@ const workflows = [
   ["causalactions", "elixir/workflows/causalactions.md", 4006, "Subconscious-ai/causalactions", "vercel"],
   ["causalflow", "elixir/workflows/causalflow.md", 4007, "Subconscious-ai/causalflow", "vercel"],
   ["causalintelligence", "elixir/workflows/causalintelligence.md", 4008, "Subconscious-ai/causalintelligence", "vercel"],
+  ["johnny-5-rebuild", "elixir/workflows/johnny-5-rebuild.md", 4009, "Subconscious-ai/johnny-5-rebuild", "github_checks"],
 ];
 
 const failures = [];
@@ -27,6 +28,11 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
     check(text, relPath, "before_run: |", "idempotent before_run setup hook");
     check(text, relPath, "test -d .venv || python3 -m venv .venv", "idempotent virtualenv setup");
     check(text, relPath, '.venv/bin/python -m pip install -e ".[dev]"', "market-ontology dev dependency setup");
+  } else if (name === "johnny-5-rebuild") {
+    check(text, relPath, "preflight: |", "preflight command");
+    check(text, relPath, "pnpm -v", "pnpm preflight");
+    check(text, relPath, "fast: pnpm run verify:agent", "fast validation command");
+    check(text, relPath, "full: pnpm run verify:agent", "full validation command");
   } else {
     check(text, relPath, "preflight: bash scripts/agent/preflight.sh", "preflight command");
     check(text, relPath, "fast: bash scripts/agent/validate-fast.sh", "fast validation command");
@@ -34,7 +40,11 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
   }
   check(text, relPath, `deploy_evidence: ${deployEvidence}`, "deploy evidence mode");
   check(text, relPath, "evidence_required: true", "evidence gate enabled");
-  check(text, relPath, 'github_required_checks: ["symphony-gate"]', "required symphony-gate check");
+  if (name === "johnny-5-rebuild") {
+    check(text, relPath, 'github_required_checks: ["CI"]', "required CI check");
+  } else {
+    check(text, relPath, 'github_required_checks: ["symphony-gate"]', "required symphony-gate check");
+  }
   check(text, relPath, "require_all_checks: true", "all non-optional checks gate");
   check(text, relPath, "max_concurrent_agents: 1", "single worker per repo");
   check(text, relPath, "max_turns: 1", "single-turn delivery handoff");
