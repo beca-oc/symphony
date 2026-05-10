@@ -294,6 +294,23 @@ If Symphony documents token reporting externally, the contract should be:
 - Turn-completed usage is event-specific and should not be assumed to be a fresh additive increment.
 - Reporting is thread-based, and multiple turns can occur on one thread.
 
+## Budget Guard
+
+`codex.max_total_tokens` is the runtime kill switch for runaway workers.
+
+When the configured value is greater than `0`, Symphony compares each running issue's cumulative
+`codex_total_tokens` against that limit after every Codex usage update. If the issue crosses the
+limit, Symphony:
+
+- stops the active worker task
+- records the final token totals in the dashboard aggregate
+- writes a `## Symphony Budget Guard` comment to the tracker issue
+- moves the issue to `Rework`
+- releases the local claim so the issue will not continue burning tokens in the active worker
+
+Use this guard for spend control. Do not rely on prompt wording, worker etiquette, or manual dashboard
+watching to stop a runaway run.
+
 ## Implementation Checklist
 
 - Prefer `thread/tokenUsage/updated.tokenUsage.total`

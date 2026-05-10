@@ -132,16 +132,7 @@ defmodule SymphonyElixir.Orchestrator do
         state =
           case reason do
             :normal ->
-              Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
-
-              state
-              |> complete_issue(issue_id)
-              |> schedule_issue_retry(issue_id, 1, %{
-                identifier: running_entry.identifier,
-                delay_type: :continuation,
-                worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
-              })
+              handle_normal_worker_exit(state, issue_id, running_entry, session_id)
 
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
@@ -195,9 +186,11 @@ defmodule SymphonyElixir.Orchestrator do
           state
           |> apply_codex_token_delta(token_delta)
           |> apply_codex_rate_limits(update)
+          |> put_running_entry(issue_id, updated_running_entry)
+          |> maybe_stop_budget_exceeded_issue(issue_id, updated_running_entry)
 
         notify_dashboard()
-        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+        {:noreply, state}
     end
   end
 
@@ -219,6 +212,27 @@ defmodule SymphonyElixir.Orchestrator do
   def handle_info(msg, state) do
     Logger.debug("Orchestrator ignored message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  defp handle_normal_worker_exit(%State{} = state, issue_id, running_entry, session_id) do
+    if budget_exceeded?(running_entry) do
+      Logger.warning("Agent task completed after crossing token budget for issue_id=#{issue_id} session_id=#{session_id}; stopping without continuation retry")
+
+      state
+      |> stop_completed_budget_exceeded_issue(issue_id, running_entry)
+      |> release_issue_claim(issue_id)
+    else
+      Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+
+      state
+      |> complete_issue(issue_id)
+      |> schedule_issue_retry(issue_id, 1, %{
+        identifier: running_entry.identifier,
+        delay_type: :continuation,
+        worker_host: Map.get(running_entry, :worker_host),
+        workspace_path: Map.get(running_entry, :workspace_path)
+      })
+    end
   end
 
   defp maybe_dispatch(%State{} = state) do
@@ -715,9 +729,12 @@ defmodule SymphonyElixir.Orchestrator do
             codex_input_tokens: 0,
             codex_output_tokens: 0,
             codex_total_tokens: 0,
+            codex_cached_input_tokens: 0,
+            codex_effective_total_tokens: 0,
             codex_last_reported_input_tokens: 0,
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
+            codex_last_reported_cached_input_tokens: 0,
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now()
@@ -970,6 +987,89 @@ defmodule SymphonyElixir.Orchestrator do
     Map.put(running_entry, key, value)
   end
 
+  defp put_running_entry(%State{} = state, issue_id, running_entry)
+       when is_binary(issue_id) and is_map(running_entry) do
+    %{state | running: Map.put(state.running, issue_id, running_entry)}
+  end
+
+  defp maybe_stop_budget_exceeded_issue(%State{} = state, issue_id, running_entry)
+       when is_binary(issue_id) and is_map(running_entry) do
+    if budget_exceeded?(running_entry) do
+      {limit, effective, total, cached} = token_budget_for(running_entry)
+      stop_budget_exceeded_issue(state, issue_id, running_entry, limit, effective, total, cached)
+    else
+      state
+    end
+  end
+
+  defp budget_exceeded?(running_entry) when is_map(running_entry) do
+    {limit, effective, _total, _cached} = token_budget_for(running_entry)
+    is_integer(limit) and limit > 0 and is_integer(effective) and effective >= limit
+  end
+
+  defp budget_exceeded?(_running_entry), do: false
+
+  defp token_budget_for(running_entry) when is_map(running_entry) do
+    total = Map.get(running_entry, :codex_total_tokens, 0)
+    cached = Map.get(running_entry, :codex_cached_input_tokens, 0)
+    effective = Map.get(running_entry, :codex_effective_total_tokens, max(total - cached, 0))
+
+    {Config.settings!().codex.max_total_tokens, effective, total, cached}
+  end
+
+  defp stop_budget_exceeded_issue(%State{} = state, issue_id, running_entry, limit, effective, total, cached) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    session_id = running_entry_session_id(running_entry)
+
+    Logger.warning(
+      "Codex token budget exceeded: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} effective_tokens=#{effective} total_tokens=#{total} cached_input_tokens=#{cached} limit=#{limit}; stopping worker"
+    )
+
+    state = terminate_running_issue(state, issue_id, false)
+
+    write_budget_guard(issue_id, identifier, session_id, limit, effective, total, cached)
+
+    state
+  end
+
+  defp stop_completed_budget_exceeded_issue(%State{} = state, issue_id, running_entry) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    session_id = running_entry_session_id(running_entry)
+    {limit, effective, total, cached} = token_budget_for(running_entry)
+
+    write_budget_guard(issue_id, identifier, session_id, limit, effective, total, cached)
+
+    state
+  end
+
+  defp write_budget_guard(issue_id, identifier, session_id, limit, effective, total, cached) do
+    body = """
+    ## Symphony Budget Guard
+
+    Worker stopped automatically because effective Codex token usage crossed the configured budget.
+
+    - Limit: #{limit}
+    - Observed effective tokens: #{effective}
+    - Observed raw total tokens: #{total}
+    - Observed cached input tokens: #{cached}
+    - Session: #{session_id}
+
+    Move this issue back to `Todo` only after reducing scope, fixing workspace bootstrap, or raising the budget intentionally.
+    """
+
+    case Tracker.create_comment(issue_id, body) do
+      :ok -> :ok
+      {:error, reason} -> Logger.error("Failed to write budget-guard comment for #{identifier}: #{inspect(reason)}")
+    end
+
+    case Tracker.update_issue_state(issue_id, "Rework") do
+      :ok -> :ok
+      {:error, reason} -> Logger.error("Failed to move #{identifier} to Rework after budget stop: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
   defp select_worker_host(%State{} = state, preferred_worker_host) do
     case Config.settings!().worker.ssh_hosts do
       [] ->
@@ -1174,10 +1274,13 @@ defmodule SymphonyElixir.Orchestrator do
     codex_input_tokens = Map.get(running_entry, :codex_input_tokens, 0)
     codex_output_tokens = Map.get(running_entry, :codex_output_tokens, 0)
     codex_total_tokens = Map.get(running_entry, :codex_total_tokens, 0)
+    codex_cached_input_tokens = Map.get(running_entry, :codex_cached_input_tokens, 0)
+    codex_effective_total_tokens = Map.get(running_entry, :codex_effective_total_tokens, 0)
     codex_app_server_pid = Map.get(running_entry, :codex_app_server_pid)
     last_reported_input = Map.get(running_entry, :codex_last_reported_input_tokens, 0)
     last_reported_output = Map.get(running_entry, :codex_last_reported_output_tokens, 0)
     last_reported_total = Map.get(running_entry, :codex_last_reported_total_tokens, 0)
+    last_reported_cached = Map.get(running_entry, :codex_last_reported_cached_input_tokens, 0)
     turn_count = Map.get(running_entry, :turn_count, 0)
 
     {
@@ -1190,9 +1293,12 @@ defmodule SymphonyElixir.Orchestrator do
         codex_input_tokens: codex_input_tokens + token_delta.input_tokens,
         codex_output_tokens: codex_output_tokens + token_delta.output_tokens,
         codex_total_tokens: codex_total_tokens + token_delta.total_tokens,
+        codex_cached_input_tokens: codex_cached_input_tokens + token_delta.cached_input_tokens,
+        codex_effective_total_tokens: codex_effective_total_tokens + token_delta.effective_total_tokens,
         codex_last_reported_input_tokens: max(last_reported_input, token_delta.input_reported),
         codex_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
         codex_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
+        codex_last_reported_cached_input_tokens: max(last_reported_cached, token_delta.cached_input_reported),
         turn_count: turn_count_for_update(turn_count, running_entry.session_id, update)
       }),
       token_delta
@@ -1372,17 +1478,28 @@ defmodule SymphonyElixir.Orchestrator do
         :total,
         usage,
         :codex_last_reported_total_tokens
+      ),
+      compute_token_delta(
+        running_entry,
+        :cached_input,
+        usage,
+        :codex_last_reported_cached_input_tokens
       )
     }
     |> Tuple.to_list()
-    |> then(fn [input, output, total] ->
+    |> then(fn [input, output, total, cached_input] ->
+      effective_total_tokens = max(total.delta - cached_input.delta, 0)
+
       %{
         input_tokens: input.delta,
         output_tokens: output.delta,
         total_tokens: total.delta,
+        cached_input_tokens: cached_input.delta,
+        effective_total_tokens: effective_total_tokens,
         input_reported: input.reported,
         output_reported: output.reported,
-        total_reported: total.reported
+        total_reported: total.reported,
+        cached_input_reported: cached_input.reported
       }
     end)
   end
@@ -1555,21 +1672,25 @@ defmodule SymphonyElixir.Orchestrator do
       :input_tokens,
       :output_tokens,
       :total_tokens,
+      :cached_input_tokens,
       :prompt_tokens,
       :completion_tokens,
       :inputTokens,
       :outputTokens,
       :totalTokens,
+      :cachedInputTokens,
       :promptTokens,
       :completionTokens,
       "input_tokens",
       "output_tokens",
       "total_tokens",
+      "cached_input_tokens",
       "prompt_tokens",
       "completion_tokens",
       "inputTokens",
       "outputTokens",
       "totalTokens",
+      "cachedInputTokens",
       "promptTokens",
       "completionTokens"
     ]
@@ -1619,6 +1740,15 @@ defmodule SymphonyElixir.Orchestrator do
         :total,
         "totalTokens",
         :totalTokens
+      ])
+
+  defp get_token_usage(usage, :cached_input),
+    do:
+      payload_get(usage, [
+        "cached_input_tokens",
+        :cached_input_tokens,
+        "cachedInputTokens",
+        :cachedInputTokens
       ])
 
   defp payload_get(payload, fields) when is_list(fields) do

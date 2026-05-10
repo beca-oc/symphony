@@ -6,7 +6,6 @@ tracker:
     - Todo
     - In Progress
     - Merging
-    - Rework
   terminal_states:
     - Closed
     - Cancelled
@@ -23,13 +22,26 @@ hooks:
     if command -v mise >/dev/null 2>&1; then
       cd elixir && mise trust && mise exec -- mix deps.get
     fi
+  before_run: |
+    if [ -d .git ]; then
+      rm -f .git/index.lock
+      if [ -f .git/refs/heads/codex ]; then
+        legacy_ref=.git/refs/heads/codex-legacy
+        if [ -e "$legacy_ref" ]; then
+          legacy_ref=".git/refs/heads/codex-legacy-$(date +%s)"
+        fi
+        mv .git/refs/heads/codex "$legacy_ref"
+      fi
+      git status --short >/dev/null
+    fi
   before_remove: |
     cd elixir && mise exec -- mix workspace.before_remove
 agent:
-  max_concurrent_agents: 10
-  max_turns: 20
+  max_concurrent_agents: 1
+  max_turns: 1
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
+  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=high app-server
+  max_total_tokens: 100000
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy:

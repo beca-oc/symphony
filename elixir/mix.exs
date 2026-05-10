@@ -82,7 +82,7 @@ defmodule SymphonyElixir.MixProject do
   defp aliases do
     [
       setup: ["deps.get"],
-      build: ["escript.build"],
+      build: ["compile"],
       lint: ["specs.check", "credo --strict"]
     ]
   end
@@ -92,7 +92,7 @@ defmodule SymphonyElixir.MixProject do
       app: nil,
       main_module: SymphonyElixir.CLI,
       name: "symphony",
-      path: "bin/symphony"
+      path: "bin/symphony.escript"
     ]
   end
 end

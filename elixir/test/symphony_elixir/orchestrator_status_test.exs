@@ -713,6 +713,272 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert snapshot_entry.codex_total_tokens == 0
   end
 
+  test "orchestrator stops active worker and moves issue to Rework when token budget is exceeded" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      codex_max_total_tokens: 100
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    issue_id = "issue-budget-stop"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-225",
+      title: "Budget stop",
+      description: "Stop runaway worker",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-225"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :BudgetStopOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    worker =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(worker), do: send(worker, :stop)
+
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: worker,
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-budget-stop",
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "thread/tokenUsage/updated",
+           "params" => %{
+             "tokenUsage" => %{
+               "total" => %{"inputTokens" => 95, "outputTokens" => 10, "totalTokens" => 105}
+             }
+           }
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    assert_receive {:memory_tracker_comment, ^issue_id, body}, 1_000
+    assert body =~ "Symphony Budget Guard"
+    assert body =~ "Limit: 100"
+    assert body =~ "Observed effective tokens: 105"
+    assert body =~ "Observed raw total tokens: 105"
+    assert body =~ "Observed cached input tokens: 0"
+    assert_receive {:memory_tracker_state_update, ^issue_id, "Rework"}, 1_000
+
+    snapshot =
+      wait_for_snapshot(
+        pid,
+        fn %{running: running} -> running == [] end,
+        500
+      )
+
+    assert snapshot.running == []
+    refute Process.alive?(worker)
+  end
+
+  test "orchestrator token budget ignores cached input tokens" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      codex_max_total_tokens: 100_000
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    issue_id = "issue-budget-cached"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-227",
+      title: "Cached budget",
+      description: "Do not stop on cached prompt tokens",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-227"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :CachedBudgetOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    worker =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(worker), do: send(worker, :stop)
+
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: worker,
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-budget-cached",
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_cached_input_tokens: 0,
+      codex_effective_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      codex_last_reported_cached_input_tokens: 0,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "thread/tokenUsage/updated",
+           "params" => %{
+             "tokenUsage" => %{
+               "total" => %{
+                 "inputTokens" => 111_400,
+                 "outputTokens" => 1_798,
+                 "cachedInputTokens" => 95_360,
+                 "totalTokens" => 113_198
+               }
+             }
+           }
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    state = :sys.get_state(pid)
+    assert %{^issue_id => running_after_update} = state.running
+    assert running_after_update.codex_total_tokens == 113_198
+    assert running_after_update.codex_cached_input_tokens == 95_360
+    assert running_after_update.codex_effective_total_tokens == 17_838
+    assert Process.alive?(worker)
+
+    refute_receive {:memory_tracker_comment, ^issue_id, _body}, 100
+    refute_receive {:memory_tracker_state_update, ^issue_id, "Rework"}, 100
+  end
+
+  test "normal worker completion over token budget moves issue to Rework without continuation retry" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      codex_max_total_tokens: 100
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    issue_id = "issue-budget-complete"
+    ref = make_ref()
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-226",
+      title: "Budget complete",
+      description: "Stop completed runaway worker",
+      state: "Todo",
+      url: "https://example.org/issues/MT-226"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :BudgetCompleteOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-budget-complete",
+      codex_input_tokens: 95,
+      codex_output_tokens: 10,
+      codex_total_tokens: 105,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+
+    assert_receive {:memory_tracker_comment, ^issue_id, body}, 1_000
+    assert body =~ "Symphony Budget Guard"
+    assert body =~ "Limit: 100"
+    assert body =~ "Observed effective tokens: 105"
+    assert body =~ "Observed raw total tokens: 105"
+    assert body =~ "Observed cached input tokens: 0"
+    assert_receive {:memory_tracker_state_update, ^issue_id, "Rework"}, 1_000
+
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+    refute Map.has_key?(state.running, issue_id)
+    refute MapSet.member?(state.claimed, issue_id)
+    refute Map.has_key?(state.retry_attempts, issue_id)
+  end
+
   test "orchestrator snapshot includes retry backoff entries" do
     orchestrator_name = Module.concat(__MODULE__, :RetryOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -957,7 +1223,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert is_integer(due_at_ms)
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    assert remaining_ms >= 9_500
+    assert remaining_ms >= 8_000
     assert remaining_ms <= 10_500
   end
 

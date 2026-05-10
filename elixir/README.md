@@ -62,15 +62,18 @@ mise trust
 mise install
 mise exec -- mix setup
 mise exec -- mix build
-mise exec -- ./bin/symphony ./WORKFLOW.md
+mise exec -- mix run -e 'SymphonyElixir.CLI.main(System.argv())' -- --i-understand-that-this-will-be-running-without-the-usual-guardrails ./WORKFLOW.md
 ```
+
+`mix build` is a compile check. Run the service through `mix run` so local edits are compiled before
+startup instead of accidentally launching a stale escript artifact.
 
 ## Configuration
 
-Pass a custom workflow file path to `./bin/symphony` when starting the service:
+Pass a custom workflow file path as the final argument when starting the service:
 
 ```bash
-./bin/symphony /path/to/custom/WORKFLOW.md
+mise exec -- mix run -e 'SymphonyElixir.CLI.main(System.argv())' -- --i-understand-that-this-will-be-running-without-the-usual-guardrails /path/to/custom/WORKFLOW.md
 ```
 
 If no path is passed, Symphony defaults to `./WORKFLOW.md`.
@@ -100,6 +103,7 @@ agent:
   max_turns: 20
 codex:
   command: codex app-server
+  max_total_tokens: 100000
 ---
 
 You are working on a Linear issue {{ issue.identifier }}.
@@ -121,6 +125,9 @@ Notes:
   Symphony validation.
 - `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
+- `codex.max_total_tokens` is a hard per-issue guard based on live Codex cumulative token totals.
+  When set above `0`, Symphony stops the worker, comments evidence on the issue, and moves it to
+  `Rework` once the issue crosses the limit. Default: `0` (disabled).
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
