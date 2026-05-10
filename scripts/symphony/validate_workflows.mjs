@@ -7,10 +7,11 @@ const workflows = [
   ["spice-harvester", "elixir/workflows/spice-harvester.md", 4002, "Subconscious-ai/spice-harvester", "github_checks"],
   ["causl.io", "elixir/workflows/causl-io.md", 4003, "Subconscious-ai/causl.io", "vercel"],
   ["market-ontology", "elixir/workflows/market-ontology.md", 4004, "Subconscious-ai/market-ontology", "github_checks"],
-  ["design-system", "elixir/workflows/design-system.md", 4005, "Subconscious-ai/design-system", "github_checks"],
-  ["causalactions", "elixir/workflows/causalactions.md", 4006, "Subconscious-ai/causalactions", "vercel"],
-  ["causalflow", "elixir/workflows/causalflow.md", 4007, "Subconscious-ai/causalflow", "vercel"],
-  ["causalintelligence", "elixir/workflows/causalintelligence.md", 4008, "Subconscious-ai/causalintelligence", "vercel"],
+  ["johnny-5-rebuild", "elixir/workflows/johnny-5-rebuild.md", 4005, "Subconscious-ai/johnny-5-rebuild", "vercel"],
+  ["design-system", "elixir/workflows/design-system.md", 4006, "Subconscious-ai/design-system", "github_checks"],
+  ["causalactions", "elixir/workflows/causalactions.md", 4007, "Subconscious-ai/causalactions", "vercel"],
+  ["causalflow", "elixir/workflows/causalflow.md", 4008, "Subconscious-ai/causalflow", "vercel"],
+  ["causalintelligence", "elixir/workflows/causalintelligence.md", 4009, "Subconscious-ai/causalintelligence", "vercel"],
 ];
 
 const failures = [];

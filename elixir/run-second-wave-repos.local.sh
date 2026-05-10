@@ -45,18 +45,20 @@ start_runner() {
     "cd '$PWD' && exec mise exec -- ./bin/symphony $ACK --logs-root './log/${name}' --port '${port}' '${workflow}'"
 }
 
-start_runner "design-system" 4005 "workflows/design-system.md"
-start_runner "causalactions" 4006 "workflows/causalactions.md"
-start_runner "causalflow" 4007 "workflows/causalflow.md"
-start_runner "causalintelligence" 4008 "workflows/causalintelligence.md"
+start_runner "johnny-5-rebuild" 4005 "workflows/johnny-5-rebuild.md"
+start_runner "design-system" 4006 "workflows/design-system.md"
+start_runner "causalactions" 4007 "workflows/causalactions.md"
+start_runner "causalflow" 4008 "workflows/causalflow.md"
+start_runner "causalintelligence" 4009 "workflows/causalintelligence.md"
 
 screen -ls || true
 
 cat <<'EOF'
 
 Dashboards:
-- design-system      http://127.0.0.1:4005/
-- causalactions      http://127.0.0.1:4006/
-- causalflow         http://127.0.0.1:4007/
-- causalintelligence http://127.0.0.1:4008/
+- johnny-5-rebuild   http://127.0.0.1:4005/
+- design-system      http://127.0.0.1:4006/
+- causalactions      http://127.0.0.1:4007/
+- causalflow         http://127.0.0.1:4008/
+- causalintelligence http://127.0.0.1:4009/
 EOF
