@@ -69,7 +69,7 @@ agent:
   max_uncached_tokens: 250000
   continue_after_normal_exit: false
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=high --config 'mcp_servers={}' --config features.plugins=false --config features.multi_agent=false app-server
+  command: env HOME="$HOME/.symphony/worker-home" CODEX_HOME="$HOME/.symphony/codex-home" codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=high --config 'mcp_servers={}' --config features.apps=false --config features.browser_use=false --config features.tool_search=false --config features.image_generation=false --config features.computer_use=false --config features.workspace_dependencies=false --config features.plugins=false --config features.multi_agent=false app-server
   approval_policy: never
   thread_sandbox: danger-full-access
   turn_sandbox_policy:
@@ -98,6 +98,10 @@ Recent Symphony harness context:
 {% endif %}
 
 Worker contract:
+
+Profile and validation boundaries:
+- Do not invoke Codex skills or read files under `~/.codex` or `~/.agents`; this unattended worker must use the compact workflow context.
+- Do not run broad validation inside Codex unless it is necessary to make the commit safely. If a check is necessary, run the narrowest scoped check once.
 
 1. Unattended Symphony worker: do not ask a human for follow-up.
 2. Work only in the provided repository copy.

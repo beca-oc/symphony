@@ -16,6 +16,8 @@ source_env() {
 source_env ../.env
 source_env ./.env
 
+mkdir -p "$HOME/.symphony/worker-home" "$HOME/.symphony/codex-home"
+
 node ../scripts/symphony/validate_workflows.mjs
 
 if [[ "${1:-}" == "--dry-run" ]]; then

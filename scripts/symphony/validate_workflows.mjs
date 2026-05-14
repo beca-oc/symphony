@@ -29,6 +29,20 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
     check(text, relPath, "before_run: |", "idempotent before_run setup hook");
     check(text, relPath, "test -d .venv || python3 -m venv .venv", "idempotent virtualenv setup");
     check(text, relPath, '.venv/bin/python -m pip install -e ".[dev]"', "market-ontology dev dependency setup");
+  } else if (name === "sizzl-trustgraph") {
+    check(text, relPath, "preflight: bash scripts/agent/preflight.sh", "preflight command");
+    check(
+      text,
+      relPath,
+      "fast: MARKET_ONTOLOGY_DIR=/__symphony_no_local_market_ontology__ bash scripts/agent/validate-fast.sh",
+      "hermetic fast validation command",
+    );
+    check(
+      text,
+      relPath,
+      "full: MARKET_ONTOLOGY_DIR=/__symphony_no_local_market_ontology__ bash scripts/agent/validate-full.sh",
+      "hermetic full validation command",
+    );
   } else {
     check(text, relPath, "preflight: bash scripts/agent/preflight.sh", "preflight command");
     check(text, relPath, "fast: bash scripts/agent/validate-fast.sh", "fast validation command");
@@ -43,9 +57,19 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
   check(text, relPath, "max_turns: 1", "single-turn delivery handoff");
   check(text, relPath, "max_uncached_tokens: 250000", "hard uncached token cap");
   check(text, relPath, "continue_after_normal_exit: false", "post-agent evidence handoff");
+  check(text, relPath, 'HOME="$HOME/.symphony/worker-home"', "isolated Symphony worker home");
+  check(text, relPath, 'CODEX_HOME="$HOME/.symphony/codex-home"', "isolated Symphony Codex home");
   check(text, relPath, 'model="gpt-5.5"', "GPT-5.5 worker model");
   check(text, relPath, "model_reasoning_effort=high", "high reasoning effort");
+  check(text, relPath, "features.apps=false", "worker apps disabled");
+  check(text, relPath, "features.browser_use=false", "worker browser disabled");
+  check(text, relPath, "features.tool_search=false", "worker tool search disabled");
+  check(text, relPath, "features.image_generation=false", "worker image generation disabled");
+  check(text, relPath, "features.computer_use=false", "worker computer use disabled");
+  check(text, relPath, "features.workspace_dependencies=false", "worker workspace dependency helpers disabled");
   check(text, relPath, "features.multi_agent=false", "worker subagents disabled");
+  check(text, relPath, "Do not invoke Codex skills or read files under `~/.codex` or `~/.agents`", "no interactive Codex profile reads");
+  check(text, relPath, "Do not run broad validation inside Codex", "Symphony-owned validation boundary");
   check(text, relPath, "Do not call Linear tools, GitHub tools, `gh`, or `git push`.", "Symphony-owned publishing rule");
   check(text, relPath, "Symphony will run validation, push the branch, create the draft PR", "Symphony-owned evidence rule");
   console.log(`${name.padEnd(16)} -> port ${port} -> ${relPath}`);

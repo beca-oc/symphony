@@ -77,6 +77,14 @@ Local multi-repo launchers:
 
 Run `./run-second-wave-repos.local.sh --dry-run` before starting the second-wave runners. This validates workflow config without launching agents.
 
+Local workflow files should launch Codex with `HOME="$HOME/.symphony/worker-home"` and
+`CODEX_HOME="$HOME/.symphony/codex-home"`. The worker home prevents unattended runs from
+discovering personal `~/.agents` skills, while the Codex home keeps auth and sessions isolated from
+the interactive profile. Keep apps, browser, tool search, image generation, computer use, workspace
+dependency helpers, plugins, and multi-agent disabled unless a repo workflow explicitly needs them.
+Workflow validation should also be hermetic: do not let local sibling repos under `$HOME` affect
+delivery gates unless the workflow explicitly provisions that dependency.
+
 ## Configuration
 
 Pass a custom workflow file path to `./bin/symphony` when starting the service:

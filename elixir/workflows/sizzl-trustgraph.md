@@ -31,8 +31,8 @@ hooks:
     bash scripts/agent/preflight.sh
 validation:
   preflight: bash scripts/agent/preflight.sh
-  fast: bash scripts/agent/validate-fast.sh
-  full: bash scripts/agent/validate-full.sh
+  fast: MARKET_ONTOLOGY_DIR=/__symphony_no_local_market_ontology__ bash scripts/agent/validate-fast.sh
+  full: MARKET_ONTOLOGY_DIR=/__symphony_no_local_market_ontology__ bash scripts/agent/validate-full.sh
   deploy_evidence: github_checks
   evidence_required: true
 evidence_gate:
@@ -66,7 +66,7 @@ agent:
   max_uncached_tokens: 250000
   continue_after_normal_exit: false
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=high --config 'mcp_servers={}' --config features.plugins=false --config features.multi_agent=false app-server
+  command: env HOME="$HOME/.symphony/worker-home" CODEX_HOME="$HOME/.symphony/codex-home" codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=high --config 'mcp_servers={}' --config features.apps=false --config features.browser_use=false --config features.tool_search=false --config features.image_generation=false --config features.computer_use=false --config features.workspace_dependencies=false --config features.plugins=false --config features.multi_agent=false app-server
   approval_policy: never
   thread_sandbox: danger-full-access
   turn_sandbox_policy:
@@ -101,11 +101,12 @@ Worker contract:
 3. Do not call Linear tools, GitHub tools, `gh`, or `git push`.
 4. Do not create or update a Linear workpad comment.
 5. Do not create or update repo-local progress/status files; keep progress evidence out of the product diff.
-6. Read `AGENTS.md` and `README.md` before editing. TrustGraph-native configuration is preferred over custom orchestration.
+6. Follow the repo guidance already loaded by Codex. Do not invoke Codex skills or read files under `~/.codex` or `~/.agents`; this unattended worker must use the compact workflow context. Read `README.md` only for product or architecture tasks, not static/docs-canary tickets.
 7. If this is `Rework`, treat the latest `## Symphony Repair Packet` as the binding scope. Continue the named `codex/{{ issue.identifier }}-...` branch and existing draft PR. Do not create a duplicate PR. If no branch is named, create `codex/{{ issue.identifier }}-<short-slug>`.
 8. Sync from `origin/main` before edits.
 9. Implement the smallest scoped change that satisfies the ticket or repair packet; avoid unrelated refactors.
 10. Commit the local change with a clear message.
 11. Leave the workspace on the committed branch and stop.
+12. Do not run broad validation inside Codex unless it is necessary to make the commit safely. If a check is necessary, run the narrowest scoped check once.
 
 Symphony will run validation, push the branch, create the draft PR, label it, record Linear evidence, require the repo-owned `symphony-gate` check, and move the issue to `Human Review` or `Rework`.
