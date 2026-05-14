@@ -40,10 +40,31 @@ evidence_gate:
   require_all_checks: true
   allow_skipped_checks: ["Run Storybook"]
   timeout_seconds: 1800
+repair:
+  max_attempts: 2
+  retryable_failure_buckets:
+    - validation_failed
+    - ci_failed
+    - ci_timeout
+    - git_push_failed
+    - missing_pr
+    - missing_label
+    - missing_workpad
+    - missing_pushed_sha
+    - pushed_sha_mismatch
+    - branch_mismatch
+    - missing_validation
+    - missing_deploy_evidence
+    - merge_conflict
+  terminal_failure_buckets:
+    - missing_secret
+    - auth_blocked
+    - unsafe_side_effect
+    - ambiguous_scope
 agent:
   max_concurrent_agents: 1
   max_turns: 1
-  max_uncached_tokens: 500000
+  max_uncached_tokens: 250000
   continue_after_normal_exit: false
 codex:
   command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=high --config 'mcp_servers={}' --config features.plugins=false --config features.multi_agent=false app-server

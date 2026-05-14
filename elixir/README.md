@@ -124,7 +124,7 @@ validation:
 agent:
   max_concurrent_agents: 10
   max_turns: 20
-  max_uncached_tokens: 500000
+  max_uncached_tokens: 250000
 codex:
   command: codex app-server
 ---

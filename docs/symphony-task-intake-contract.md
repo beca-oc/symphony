@@ -1,54 +1,51 @@
 # Symphony Task Intake Contract
 
-Symphony work should be queued, bounded, and evidence-heavy by default.
-
-This does not mean every thought, spike, or design conversation needs Symphony. It means every
-task delegated to autonomous execution must be shaped so the harness can select it, constrain it,
-verify it, and leave an audit trail without relying on chat memory.
+Hermes routes repo-changing work to Linear. Symphony executes the issue. Codex workers edit local
+files only. Keep this contract compact; repo-owned `AGENTS.md` files carry the detailed allowed
+surfaces and validation rules.
 
 ## When To Use Symphony
 
-Use Symphony when the work has these traits:
+Use Symphony for bounded repo work: code, tests, docs, UI, config, CI, data contracts, or deployment
+behavior. Use direct Codex for exploratory debugging, design iteration, or unclear product shaping.
 
-- It belongs to a Linear queue and a repo-mapped Linear project.
-- It can be expressed as one bounded issue or a parent issue plus repo-specific child issues.
-- The repo exposes deterministic `scripts/agent/*` validation.
-- The expected evidence is mechanical: branch, draft PR, label, SHA, validation, CI/deploy URL,
-  workpad, evidence gate, trace, and final Linear state.
-- The right completion state is `Human Review`, `Rework`, or a policy-approved merge.
+## Compact Ticket Shape
 
-Use direct Codex when the work is exploratory, ambiguous, or tightly interactive. Direct Codex is
-still the right tool for design exploration, unclear debugging, and rapid human-agent iteration.
-
-## Required Ticket Shape
-
-Every Symphony ticket must include:
+Hermes should create short issues with:
 
 - `Goal`: one sentence outcome.
-- `Queue`: Linear project and starting state.
-- `Repo`: repo mapping and base branch.
-- `Risk Tier`: `static`, `test-only`, `product-code`, `migration`, or `secrets/live`.
-- `Scope`: concise work summary.
-- `Boundaries`: explicit include and exclude lists.
-- `Acceptance`: behavioral and evidence acceptance.
-- `Validation`: preflight, fast, and full validation commands as applicable.
-- `Evidence`: workpad, evidence gate, draft PR, label, pushed SHA, validation result, trace, and
-  check/deploy URL.
-- `Deploy / Check Evidence`: required `symphony-gate` and deploy/check source.
-- `Exit Policy`: when Symphony may move to `Human Review`, `Rework`, or merge.
-- `Failure Handling`: failure bucket and repair/retry behavior.
+- `Repo`: Linear project, GitHub repo, task type, and risk tier.
+- `Acceptance`: observable behavior plus PR/evidence expectation.
+- `Validation`: `preflight`, `validate-fast`, and task-specific checks only when needed.
+- `Notes`: user URL, screenshot, constraints, or source evidence.
+
+Do not duplicate long implementation plans in Linear by default. If a task needs a plan, create a
+planning/discovery issue first.
+
+## Repo Contract
+
+Every Symphony repo must expose:
+
+- `scripts/agent/preflight.sh`
+- `scripts/agent/validate-fast.sh`
+- `scripts/agent/validate-full.sh`
+- `AGENTS.md`
+- `.github/workflows/symphony-gate.yml`
+
+`validate-fast.sh` should target 2-5 minutes and avoid live services, broad browser suites, and full
+production builds unless the repo has measured that path as fast.
 
 ## Policy
 
-- Workers do not push, open PRs, update Linear workpads, or move issues to review.
+- Workers do not call Linear tools, GitHub tools, `gh`, or `git push`.
 - Symphony owns validation, push, draft PR creation, PR labeling, evidence comments, traces, and
   state transitions.
-- OpenClaw Product Engineer owns ticket quality.
-- OpenClaw Reviewer/Merge Captain owns mechanical evidence review first, then semantic review.
-- A task that cannot name its queue, boundaries, and evidence is not ready for autonomous
-  execution.
+- Symphony stops at `Human Review` or `Rework`; merge/close is deterministic GitHub/Linear plumbing.
+- Repair loops are bounded by workflow config; more retries usually hide bad repo contracts.
 
-## Decision Rule
+## Operations
 
-If the work is ambiguous but important, start with a direct Codex planning/debugging session. Once
-the next step is clear, convert it into a Symphony-ready ticket using the intake contract.
+- Audit repo contracts: `node scripts/symphony/audit_agent_contracts.mjs`
+- Validate lane config: `node scripts/symphony/validate_workflows.mjs`
+- Dry-run cleanup: `node scripts/symphony/janitor.mjs --age-days 7`
+- Include Linear canary cleanup: `node scripts/symphony/janitor.mjs --linear --age-days 7`
