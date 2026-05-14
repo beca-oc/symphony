@@ -55,7 +55,7 @@ validation:
 agent:
   max_concurrent_agents: 1
   max_turns: 1
-  max_uncached_tokens: 500000
+  max_uncached_tokens: 250000
   continue_after_normal_exit: false
 codex:
   command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.2"' --config model_reasoning_effort=medium app-server

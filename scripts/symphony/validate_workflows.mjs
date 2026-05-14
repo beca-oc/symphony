@@ -38,8 +38,10 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
   check(text, relPath, "evidence_required: true", "evidence gate enabled");
   check(text, relPath, 'github_required_checks: ["symphony-gate"]', "required symphony-gate check");
   check(text, relPath, "require_all_checks: true", "all non-optional checks gate");
+  check(text, relPath, "repair:\n  max_attempts: 2", "bounded repair policy");
   check(text, relPath, "max_concurrent_agents: 1", "single worker per repo");
   check(text, relPath, "max_turns: 1", "single-turn delivery handoff");
+  check(text, relPath, "max_uncached_tokens: 250000", "hard uncached token cap");
   check(text, relPath, "continue_after_normal_exit: false", "post-agent evidence handoff");
   check(text, relPath, 'model="gpt-5.5"', "GPT-5.5 worker model");
   check(text, relPath, "model_reasoning_effort=high", "high reasoning effort");
