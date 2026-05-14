@@ -12,6 +12,7 @@ const workflows = [
   ["causalactions", "elixir/workflows/causalactions.md", 4007, "Subconscious-ai/causalactions", "vercel"],
   ["causalflow", "elixir/workflows/causalflow.md", 4008, "Subconscious-ai/causalflow", "vercel"],
   ["causalintelligence", "elixir/workflows/causalintelligence.md", 4009, "Subconscious-ai/causalintelligence", "vercel"],
+  ["sizzl-trustgraph", "elixir/workflows/sizzl-trustgraph.md", 4010, "Subconscious-ai/sizzl-trustgraph", "github_checks"],
 ];
 
 const failures = [];

@@ -73,6 +73,7 @@ Local multi-repo launchers:
 - `./run-four-repos.local.sh` starts the proved practice set on ports `4001` through `4004`.
 - `./run-second-wave-repos.local.sh` starts the second-wave onboarding set on ports `4005` through `4009`:
   `johnny-5-rebuild`, `design-system`, `causalactions`, `causalflow`, and `causalintelligence`.
+- `./run-sizzl-trustgraph.local.sh` starts the Sizzl TrustGraph lane on port `4010`.
 
 Run `./run-second-wave-repos.local.sh --dry-run` before starting the second-wave runners. This validates workflow config without launching agents.
 
