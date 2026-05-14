@@ -18,8 +18,15 @@ if (repos.length === 0) fail(`No workflow repos matched${repoFilter ? ` ${repoFi
 console.log(`Symphony janitor ${apply ? "APPLY" : "DRY-RUN"}; cutoff=${cutoff.toISOString()}`);
 console.log(`Repos: ${repos.join(", ")}`);
 
+let hadFailure = false;
+
 for (const repo of repos) {
-  inspectRepo(repo);
+  try {
+    await inspectRepo(repo);
+  } catch (error) {
+    hadFailure = true;
+    console.error(`failed ${repo}: ${error.message}`);
+  }
 }
 
 if (includeLinear) {
@@ -27,6 +34,8 @@ if (includeLinear) {
 }
 
 inspectLanes();
+
+if (hadFailure) process.exitCode = 1;
 
 function readRepos() {
   return fs
@@ -40,7 +49,7 @@ function readRepos() {
     .sort();
 }
 
-function inspectRepo(repo) {
+async function inspectRepo(repo) {
   console.log(`\n== ${repo} ==`);
   const openBranches = new Set(
     gh(["pr", "list", "--repo", repo, "--state", "open", "--json", "headRefName", "--jq", ".[].headRefName"])
@@ -71,7 +80,7 @@ function inspectRepo(repo) {
     console.log("stale canary PRs: none");
   } else {
     for (const pr of staleCanaries) {
-      action(`close stale canary PR ${pr.url}`, () =>
+      await action(`close stale canary PR ${pr.url}`, () =>
         gh(["pr", "close", String(pr.number), "--repo", repo, "--comment", "Closing stale Symphony canary via janitor."]),
       );
     }
@@ -109,9 +118,7 @@ function inspectRepo(repo) {
     console.log("merged/closed codex branches: none");
   } else {
     for (const branch of deleteCandidates) {
-      action(`delete branch ${repo}:${branch}`, () =>
-        gh(["api", "-X", "DELETE", `repos/${repo}/git/refs/heads/${branch}`]),
-      );
+      await action(`delete branch ${repo}:${branch}`, () => deleteBranch(repo, branch));
     }
   }
 }
@@ -213,10 +220,12 @@ async function action(label, fn) {
   }
   const result = fn();
   if (result && typeof result.then === "function") {
-    await result;
+    const value = await result;
+    if (value === "skipped") return;
     console.log(`done: ${label}`);
     return;
   }
+  if (result === "skipped") return;
   console.log(`done: ${label}`);
 }
 
@@ -245,13 +254,38 @@ function gh(args) {
   return sh("gh", args);
 }
 
-function sh(command, args, opts = {}) {
+function deleteBranch(repo, branch) {
   try {
-    return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    gh(["api", "-X", "DELETE", `repos/${repo}/git/refs/heads/${branch}`]);
   } catch (error) {
-    if (opts.allowFailure) return `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    if (/Not Found/i.test(output)) {
+      console.log(`skip: branch missing or not deletable with current GitHub token: ${repo}:${branch}`);
+      return "skipped";
+    }
     throw error;
   }
+}
+
+function sh(command, args, opts = {}) {
+  const attempts = command === "gh" ? 2 : 1;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts && transientGhError(error)) continue;
+      if (opts.allowFailure) return `${error.stdout ?? ""}${error.stderr ?? ""}`;
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
+function transientGhError(error) {
+  const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+  return /TLS handshake timeout|i\/o timeout|connection reset|network is unreachable/i.test(output);
 }
 
 function valueArg(name) {
