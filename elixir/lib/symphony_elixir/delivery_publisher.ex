@@ -108,7 +108,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp git_push_once(workspace, branch) do
-    case System.cmd("git", ["-C", workspace, "push", "-u", "origin", branch], stderr_to_stdout: true) do
+    case System.cmd("git", ["-C", workspace, "-c", "core.hooksPath=/dev/null", "push", "-u", "origin", branch], stderr_to_stdout: true) do
       {_output, 0} -> :ok
       {output, status} -> {:error, {:git_push_failed, status, truncate_output(output)}}
     end

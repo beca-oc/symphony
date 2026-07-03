@@ -27,6 +27,8 @@ hooks:
   after_create: |
     set -eu
     git clone https://github.com/Subconscious-ai/johnny-5-rebuild.git .
+    git config user.name "Avi Yashchin"
+    git config user.email "3144839+aviyashchin@users.noreply.github.com"
     git config core.hooksPath /dev/null || true
     bash scripts/agent/preflight.sh
 validation:

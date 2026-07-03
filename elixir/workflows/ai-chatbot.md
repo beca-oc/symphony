@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "ai-chatbot-042ccd5f20ae"
+  project_slug: "042ccd5f20ae"
   active_states:
     - Todo
     - In Progress
@@ -27,6 +27,8 @@ hooks:
   after_create: |
     set -eu
     git clone https://github.com/Subconscious-ai/ai-chatbot.git .
+    git config user.name "Avi Yashchin"
+    git config user.email "3144839+aviyashchin@users.noreply.github.com"
     git config core.hooksPath /dev/null || true
     bash scripts/agent/preflight.sh
 validation:

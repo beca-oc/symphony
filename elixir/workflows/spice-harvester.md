@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "spice-harvester-0d42c5a21573"
+  project_slug: "0d42c5a21573"
   active_states:
     - Todo
     - In Progress
@@ -27,6 +27,8 @@ hooks:
   after_create: |
     set -eu
     git clone https://github.com/Subconscious-ai/spice-harvester.git .
+    git config user.name "Avi Yashchin"
+    git config user.email "3144839+aviyashchin@users.noreply.github.com"
     git config core.hooksPath /dev/null || true
 validation:
   preflight: bash scripts/agent/preflight.sh

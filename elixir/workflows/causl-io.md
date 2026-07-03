@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "causlio-71a996a4475b"
+  project_slug: "71a996a4475b"
   active_states:
     - Todo
     - In Progress
@@ -27,6 +27,8 @@ hooks:
   after_create: |
     set -eu
     git clone https://github.com/Subconscious-ai/causl.io.git .
+    git config user.name "Avi Yashchin"
+    git config user.email "3144839+aviyashchin@users.noreply.github.com"
     git config core.hooksPath /dev/null || true
     bash scripts/agent/preflight.sh
 validation:

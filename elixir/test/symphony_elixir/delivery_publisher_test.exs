@@ -60,7 +60,7 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
         assert body =~ "Deployment/Check: https://vercel.com/example/preview"
 
         log = File.read!(log_path)
-        assert log =~ "push -u origin codex/BEC-99-marker"
+        assert log =~ "-c core.hooksPath=/dev/null push -u origin codex/BEC-99-marker"
         assert log =~ "gh pr create --draft"
         assert log =~ "gh api --method POST repos/Subconscious-ai/example/issues/99/labels"
         assert log =~ "labels[]=symphony"
@@ -537,6 +537,11 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
       shift
       workspace="$1"
       shift
+
+      while [ "$1" = "-c" ]; do
+        shift
+        shift
+      done
 
       if [ "$1" = "push" ]; then
         if [ -n "$GIT_PUSH_NON_FF_ONCE" ]; then

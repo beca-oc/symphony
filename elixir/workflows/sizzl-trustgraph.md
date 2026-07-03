@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "sizzl-trustgraph-ecaca43ff1f4"
+  project_slug: "ecaca43ff1f4"
   active_states:
     - Todo
     - In Progress
@@ -27,6 +27,8 @@ hooks:
   after_create: |
     set -eu
     git clone https://github.com/Subconscious-ai/sizzl-trustgraph.git .
+    git config user.name "Avi Yashchin"
+    git config user.email "3144839+aviyashchin@users.noreply.github.com"
     git config core.hooksPath /dev/null || true
     bash scripts/agent/preflight.sh
 validation:

@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "design-system-937ae463bc9c"
+  project_slug: "937ae463bc9c"
   active_states:
     - Todo
     - In Progress
@@ -27,6 +27,8 @@ hooks:
   after_create: |
     set -eu
     git clone https://github.com/Subconscious-ai/design-system.git .
+    git config user.name "Avi Yashchin"
+    git config user.email "3144839+aviyashchin@users.noreply.github.com"
     git config core.hooksPath /dev/null || true
     bash scripts/agent/preflight.sh
 validation:
