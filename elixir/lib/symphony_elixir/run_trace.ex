@@ -182,7 +182,6 @@ defmodule SymphonyElixir.RunTrace do
 
   defp maybe_put_map(payload, _key, value) when value == %{}, do: payload
   defp maybe_put_map(payload, key, value) when is_map(value), do: Map.put(payload, key, value)
-  defp maybe_put_map(payload, _key, _value), do: payload
 
   defp maybe_put_detail_value(payload, payload_key, details, details_key) do
     if present?(Map.get(payload, payload_key)) do

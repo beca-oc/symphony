@@ -60,8 +60,6 @@ defmodule SymphonyElixir.PromptBuilder do
       (String.contains?(body, "## Symphony Evidence Gate") and String.match?(body, ~r/result:\s*failed/i))
   end
 
-  defp harness_repair_comment?(_body), do: false
-
   defp truncate_comment(body) when byte_size(body) <= @max_harness_comment_chars, do: body
 
   defp truncate_comment(body), do: String.slice(body, 0, @max_harness_comment_chars) <> "\n[truncated]"

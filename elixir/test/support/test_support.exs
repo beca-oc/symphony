@@ -98,6 +98,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_api_token: "token",
           tracker_project_slug: "project",
           tracker_assignee: nil,
+          tracker_required_labels: [],
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           repo_name: nil,
@@ -154,6 +155,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_api_token = Keyword.get(config, :tracker_api_token)
     tracker_project_slug = Keyword.get(config, :tracker_project_slug)
     tracker_assignee = Keyword.get(config, :tracker_assignee)
+    tracker_required_labels = Keyword.get(config, :tracker_required_labels)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     repo_name = Keyword.get(config, :repo_name)
@@ -211,6 +213,7 @@ defmodule SymphonyElixir.TestSupport do
         "  api_key: #{yaml_value(tracker_api_token)}",
         "  project_slug: #{yaml_value(tracker_project_slug)}",
         "  assignee: #{yaml_value(tracker_assignee)}",
+        "  required_labels: #{yaml_value(tracker_required_labels)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
         repo_yaml(repo_name, repo_github_repo, repo_default_branch),

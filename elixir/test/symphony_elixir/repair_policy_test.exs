@@ -21,5 +21,7 @@ defmodule SymphonyElixir.RepairPolicyTest do
     assert RepairPolicy.next_action(policy, :ci_failed, 1) == :retry_same_branch
     assert RepairPolicy.next_action(policy, :ci_failed, 2) == :human_required
     assert RepairPolicy.next_action(policy, :unsafe_side_effect, 0) == :human_required
+    assert RepairPolicy.next_action(%{retryable_failure_buckets: ["ci_failed"]}, :ci_failed, 1) == :retry_same_branch
+    assert RepairPolicy.next_action(%{terminal_failure_buckets: [123]}, 123, 0) == :human_required
   end
 end

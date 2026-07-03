@@ -188,8 +188,6 @@ defmodule SymphonyElixir.DeliveryEvidence do
     Enum.any?(failures, &pending_failure?/1) or failure_bucket(failures) == :missing_deploy_evidence
   end
 
-  defp pending_report?(_report), do: false
-
   defp pending_failure?(failure) when is_binary(failure) do
     failure = String.downcase(failure)
     String.contains?(failure, "check still pending") or String.contains?(failure, "missing required pr check")

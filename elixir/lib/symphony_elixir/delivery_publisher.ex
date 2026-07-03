@@ -55,11 +55,6 @@ defmodule SymphonyElixir.DeliveryPublisher do
         Logger.warning("Delivery publisher failed for #{issue.identifier}: #{inspect(reason)}")
         maybe_create_blocker_workpad(issue, workspace, reason)
         error
-
-      reason ->
-        Logger.warning("Delivery publisher failed for #{issue.identifier}: #{inspect(reason)}")
-        maybe_create_blocker_workpad(issue, workspace, reason)
-        {:error, reason}
     end
   end
 
@@ -124,8 +119,6 @@ defmodule SymphonyElixir.DeliveryPublisher do
       String.contains?(output, "fetch first") or
       String.contains?(output, "tip of your current branch is behind")
   end
-
-  defp non_fast_forward_push?(_output), do: false
 
   defp reconcile_remote_branch_and_push(workspace, branch) do
     with :ok <- git_fetch_branch(workspace, branch),
@@ -281,8 +274,6 @@ defmodule SymphonyElixir.DeliveryPublisher do
     end
   end
 
-  defp pr_number(pr_url), do: {:error, {:missing_pr_number, pr_url}}
-
   defp poll_pr(repo, pr_url) do
     case System.cmd(
            "gh",
@@ -390,8 +381,6 @@ defmodule SymphonyElixir.DeliveryPublisher do
         :ready
     end
   end
-
-  defp pr_evidence_state(_pull_request, true, _evidence_gate), do: {:pending, ["missing pull request evidence"]}
 
   defp pending_failure?(failure) when is_binary(failure) do
     failure = String.downcase(failure)
@@ -557,7 +546,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
     ## Codex Workpad
 
     - Linear: #{issue.url || issue.identifier}
-    - Workspace: `#{workspace || "unknown"}`
+    - Workspace: `#{workspace}`
     - Branch: `#{branch}`
     - Final commit SHA: `#{commit}`
     - Validation: blocked before complete publication
@@ -575,8 +564,6 @@ defmodule SymphonyElixir.DeliveryPublisher do
       {output, status} -> {:error, {:git_failed, args, status, truncate_output(output)}}
     end
   end
-
-  defp git_value(_workspace, _args), do: {:error, :missing_workspace}
 
   defp value_or({:ok, value}, _fallback), do: value
   defp value_or(_error, fallback), do: fallback

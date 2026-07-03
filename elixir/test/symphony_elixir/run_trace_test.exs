@@ -185,6 +185,74 @@ defmodule SymphonyElixir.RunTraceTest do
     end
   end
 
+  test "record handles default details, invalid inputs, and direct entry evidence" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-run-trace-defaults-#{System.unique_integer([:positive])}")
+    trace_file = Path.join(test_root, "runs.ndjson")
+    old_trace_file = Application.get_env(:symphony_elixir, :run_trace_file)
+
+    try do
+      Application.put_env(:symphony_elixir, :run_trace_file, trace_file)
+
+      assert :ok =
+               RunTrace.record(
+                 %{
+                   identifier: "BEC-3",
+                   pr_url: "https://github.com/Subconscious-ai/example/pull/3",
+                   check_url: "https://github.com/Subconscious-ai/example/actions/runs/3/job/4",
+                   manual_rescue_count: 2,
+                   started_at: nil
+                 },
+                 :completed,
+                 :none
+               )
+
+      assert :ok = RunTrace.record(:invalid, :completed, :none, %{})
+      assert [] = RunTrace.recent(0)
+
+      assert [%{"issue_identifier" => "BEC-3"} = payload] = RunTrace.recent()
+      assert payload["pr_url"] == "https://github.com/Subconscious-ai/example/pull/3"
+      assert payload["check_url"] == "https://github.com/Subconscious-ai/example/actions/runs/3/job/4"
+      assert payload["manual_rescue_count"] == 2
+      assert payload["started_at"] == nil
+      assert payload["runtime_seconds"] == 0
+    after
+      restore_app_env(:run_trace_file, old_trace_file)
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "recent and record degrade gracefully when trace files are missing or unwritable" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-run-trace-errors-#{System.unique_integer([:positive])}")
+    missing_trace_file = Path.join(test_root, "missing.ndjson")
+    unwritable_trace_file = Path.join(test_root, "trace-directory")
+    old_trace_file = Application.get_env(:symphony_elixir, :run_trace_file)
+
+    try do
+      Application.put_env(:symphony_elixir, :run_trace_file, missing_trace_file)
+      assert [] = RunTrace.recent(5)
+
+      File.mkdir_p!(unwritable_trace_file)
+      Application.put_env(:symphony_elixir, :run_trace_file, unwritable_trace_file)
+
+      read_log =
+        capture_log(fn ->
+          assert [] = RunTrace.recent(5)
+        end)
+
+      assert read_log =~ "Failed to read Symphony run trace"
+
+      write_log =
+        capture_log(fn ->
+          assert :ok = RunTrace.record(%{identifier: "BEC-4"}, :completed, :none)
+        end)
+
+      assert write_log =~ "Failed to append Symphony run trace"
+    after
+      restore_app_env(:run_trace_file, old_trace_file)
+      File.rm_rf(test_root)
+    end
+  end
+
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
 end
