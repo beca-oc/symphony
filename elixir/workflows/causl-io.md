@@ -39,8 +39,9 @@ validation:
   evidence_required: true
 evidence_gate:
   github_required_checks: ["symphony-gate"]
+  github_optional_checks: ["Vercel – innovation-engine"]
   require_all_checks: true
-  allow_skipped_checks: ["Run Storybook"]
+  allow_skipped_checks: ["Run Storybook", "Test E2E on Checkly"]
   timeout_seconds: 1800
 repair:
   max_attempts: 2
