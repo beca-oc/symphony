@@ -213,7 +213,7 @@ defmodule SymphonyElixir.DeliveryEvidence do
   end
 
   defp poll_interval_ms do
-    Application.get_env(:symphony_elixir, :delivery_evidence_poll_interval_ms, 2_000)
+    Application.get_env(:symphony_elixir, :delivery_evidence_poll_interval_ms, 15_000)
   end
 
   @spec evaluate(Issue.t(), Path.t() | nil, keyword()) ::

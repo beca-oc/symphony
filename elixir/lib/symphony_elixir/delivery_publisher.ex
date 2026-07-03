@@ -483,7 +483,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp evidence_poll_interval_ms do
-    Application.get_env(:symphony_elixir, :delivery_publisher_poll_interval_ms, 2_000)
+    Application.get_env(:symphony_elixir, :delivery_publisher_poll_interval_ms, 15_000)
   end
 
   defp deployment_url(pull_request) when is_map(pull_request) do
