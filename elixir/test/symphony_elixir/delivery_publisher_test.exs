@@ -73,6 +73,59 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     end
   end
 
+  test "publisher does not inherit ambient GitHub token env into git and gh subprocesses" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-delivery-publisher-token-env-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace = Path.join(test_root, "workspace")
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "README.md"), "# publisher\n")
+      System.cmd("git", ["-C", workspace, "init", "-b", "codex/BEC-99-marker"])
+      System.cmd("git", ["-C", workspace, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", workspace, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", workspace, "add", "README.md"])
+      System.cmd("git", ["-C", workspace, "commit", "-m", "publisher evidence"])
+      System.cmd("git", ["-C", workspace, "remote", "add", "origin", "https://github.com/Subconscious-ai/example.git"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repo_github_repo: "Subconscious-ai/example",
+        repo_default_branch: "main",
+        validation_fast: "printf 'fast validation passed\\n'",
+        validation_deploy_evidence: "vercel",
+        validation_evidence_required: true
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      issue = %Issue{
+        id: "issue-publish",
+        identifier: "BEC-99",
+        title: "Publish delivery",
+        state: "In Progress",
+        url: "https://linear.app/example/issue/BEC-99/publish-delivery"
+      }
+
+      with_fake_gh_and_git(fn log_path ->
+        with_env(%{"GH_TOKEN" => "read-only-token", "GITHUB_TOKEN" => "read-only-token"}, fn ->
+          assert {:ok, _evidence} = DeliveryPublisher.publish(issue, workspace)
+        end)
+
+        log = File.read!(log_path)
+        assert log =~ "git-env GH_TOKEN=unset GITHUB_TOKEN=unset"
+        assert log =~ "gh-env GH_TOKEN=unset GITHUB_TOKEN=unset"
+        refute log =~ "GH_TOKEN=set"
+        refute log =~ "GITHUB_TOKEN=set"
+      end)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "publisher waits for terminal green GitHub check evidence after PR creation" do
     test_root =
       Path.join(
@@ -532,6 +585,11 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     """
     #!/bin/sh
     printf 'git %s\\n' "$*" >> "$COMMAND_LOG"
+    gh_token_state=unset
+    github_token_state=unset
+    if [ -n "$GH_TOKEN" ]; then gh_token_state=set; fi
+    if [ -n "$GITHUB_TOKEN" ]; then github_token_state=set; fi
+    printf 'git-env GH_TOKEN=%s GITHUB_TOKEN=%s\\n' "$gh_token_state" "$github_token_state" >> "$COMMAND_LOG"
 
     if [ "$1" = "-C" ]; then
       shift
@@ -583,6 +641,11 @@ defmodule SymphonyElixir.DeliveryPublisherTest do
     """
     #!/bin/sh
     printf 'gh %s\\n' "$*" >> "$COMMAND_LOG"
+    gh_token_state=unset
+    github_token_state=unset
+    if [ -n "$GH_TOKEN" ]; then gh_token_state=set; fi
+    if [ -n "$GITHUB_TOKEN" ]; then github_token_state=set; fi
+    printf 'gh-env GH_TOKEN=%s GITHUB_TOKEN=%s\\n' "$gh_token_state" "$github_token_state" >> "$COMMAND_LOG"
 
     if [ "$1" = "label" ] && [ "$2" = "create" ]; then
       exit 0

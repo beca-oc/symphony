@@ -108,7 +108,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp git_push_once(workspace, branch) do
-    case System.cmd("git", ["-C", workspace, "-c", "core.hooksPath=/dev/null", "push", "-u", "origin", branch], stderr_to_stdout: true) do
+    case github_cmd("git", ["-C", workspace, "-c", "core.hooksPath=/dev/null", "push", "-u", "origin", branch], stderr_to_stdout: true) do
       {_output, 0} -> :ok
       {output, status} -> {:error, {:git_push_failed, status, truncate_output(output)}}
     end
@@ -128,19 +128,19 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp git_fetch_branch(workspace, branch) do
-    case System.cmd("git", ["-C", workspace, "fetch", "origin", branch], stderr_to_stdout: true) do
+    case github_cmd("git", ["-C", workspace, "fetch", "origin", branch], stderr_to_stdout: true) do
       {_output, 0} -> :ok
       {output, status} -> {:error, {:git_fetch_failed, status, truncate_output(output)}}
     end
   end
 
   defp git_rebase_branch(workspace, branch) do
-    case System.cmd("git", ["-C", workspace, "rebase", "origin/#{branch}"], stderr_to_stdout: true) do
+    case github_cmd("git", ["-C", workspace, "rebase", "origin/#{branch}"], stderr_to_stdout: true) do
       {_output, 0} ->
         :ok
 
       {output, status} ->
-        System.cmd("git", ["-C", workspace, "rebase", "--abort"], stderr_to_stdout: true)
+        github_cmd("git", ["-C", workspace, "rebase", "--abort"], stderr_to_stdout: true)
         {:error, {:git_rebase_failed, status, truncate_output(output)}}
     end
   end
@@ -166,7 +166,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
     ]
 
     try do
-      case System.cmd("gh", args, stderr_to_stdout: true) do
+      case github_cmd("gh", args, stderr_to_stdout: true) do
         {output, 0} -> pr_url_from_output(output)
         {output, _status} -> find_existing_pr(repo, branch, output)
       end
@@ -190,7 +190,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp find_existing_pr(repo, branch, original_output) do
-    case System.cmd(
+    case github_cmd(
            "gh",
            [
              "pr",
@@ -225,7 +225,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp ensure_symphony_label(repo) do
-    System.cmd(
+    github_cmd(
       "gh",
       [
         "label",
@@ -247,7 +247,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
 
   defp add_symphony_label(repo, pr_url) do
     with {:ok, number} <- pr_number(pr_url) do
-      System.cmd(
+      github_cmd(
         "gh",
         [
           "api",
@@ -275,7 +275,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
   end
 
   defp poll_pr(repo, pr_url) do
-    case System.cmd(
+    case github_cmd(
            "gh",
            [
              "pr",
@@ -559,7 +559,7 @@ defmodule SymphonyElixir.DeliveryPublisher do
   defp maybe_create_blocker_workpad(_issue, _workspace, _reason), do: :ok
 
   defp git_value(workspace, args) when is_binary(workspace) do
-    case System.cmd("git", ["-C", workspace | args], stderr_to_stdout: true) do
+    case github_cmd("git", ["-C", workspace | args], stderr_to_stdout: true) do
       {output, 0} -> {:ok, String.trim(output)}
       {output, status} -> {:error, {:git_failed, args, status, truncate_output(output)}}
     end
@@ -567,6 +567,14 @@ defmodule SymphonyElixir.DeliveryPublisher do
 
   defp value_or({:ok, value}, _fallback), do: value
   defp value_or(_error, fallback), do: fallback
+
+  defp github_cmd(command, args, opts) do
+    System.cmd(command, args, Keyword.update(opts, :env, github_cmd_env(), &(github_cmd_env() ++ &1)))
+  end
+
+  defp github_cmd_env do
+    [{"GH_TOKEN", nil}, {"GITHUB_TOKEN", nil}]
+  end
 
   defp default_branch(%{repo: %{default_branch: branch}}) when is_binary(branch) and branch != "", do: branch
   defp default_branch(_settings), do: "main"
