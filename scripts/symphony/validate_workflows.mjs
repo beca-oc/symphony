@@ -13,6 +13,7 @@ const workflows = [
   ["causalflow", "elixir/workflows/causalflow.md", 4008, "Subconscious-ai/causalflow", "vercel"],
   ["causalintelligence", "elixir/workflows/causalintelligence.md", 4009, "Subconscious-ai/causalintelligence", "vercel"],
   ["sizzl-trustgraph", "elixir/workflows/sizzl-trustgraph.md", 4010, "Subconscious-ai/sizzl-trustgraph", "github_checks"],
+  ["website", "elixir/workflows/website.md", 4011, "Subconscious-ai/website", "vercel"],
 ];
 
 const failures = [];
@@ -43,6 +44,10 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
       "full: MARKET_ONTOLOGY_DIR=/__symphony_no_local_market_ontology__ bash scripts/agent/validate-full.sh",
       "hermetic full validation command",
     );
+  } else if (name === "website") {
+    check(text, relPath, "preflight: npm ci --ignore-scripts", "preflight command");
+    check(text, relPath, "fast: npm run build", "fast validation command");
+    check(text, relPath, "full: npm run build", "full validation command");
   } else {
     check(text, relPath, "preflight: bash scripts/agent/preflight.sh", "preflight command");
     check(text, relPath, "fast: bash scripts/agent/validate-fast.sh", "fast validation command");
@@ -50,8 +55,13 @@ for (const [name, relPath, port, githubRepo, deployEvidence] of workflows) {
   }
   check(text, relPath, `deploy_evidence: ${deployEvidence}`, "deploy evidence mode");
   check(text, relPath, "evidence_required: true", "evidence gate enabled");
-  check(text, relPath, 'github_required_checks: ["symphony-gate"]', "required symphony-gate check");
-  check(text, relPath, "require_all_checks: true", "all non-optional checks gate");
+  if (name === "website") {
+    check(text, relPath, "github_required_checks: []", "no repo-owned Symphony gate yet");
+    check(text, relPath, "require_all_checks: false", "Vercel-only website gate");
+  } else {
+    check(text, relPath, 'github_required_checks: ["symphony-gate"]', "required symphony-gate check");
+    check(text, relPath, "require_all_checks: true", "all non-optional checks gate");
+  }
   check(text, relPath, "repair:\n  max_attempts: 2", "bounded repair policy");
   check(text, relPath, "max_concurrent_agents: 1", "single worker per repo");
   check(text, relPath, "max_turns: 1", "single-turn delivery handoff");

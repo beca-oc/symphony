@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "ae0ebea7b7e5"
+  project_slug: "871105ef5efa"
   active_states:
     - Todo
     - In Progress
@@ -17,29 +17,28 @@ tracker:
 polling:
   interval_ms: 300000
 workspace:
-  root: ~/code/symphony-workspaces/johnny-5-rebuild
+  root: ~/code/symphony-workspaces/website
 repo:
-  name: johnny-5-rebuild
-  github_repo: Subconscious-ai/johnny-5-rebuild
+  name: website
+  github_repo: Subconscious-ai/website
   default_branch: main
 hooks:
   timeout_ms: 600000
   after_create: |
     set -eu
-    git clone https://github.com/Subconscious-ai/johnny-5-rebuild.git .
+    git clone https://github.com/Subconscious-ai/website.git .
     git config user.name "Avi Yashchin"
     git config user.email "3144839+aviyashchin@users.noreply.github.com"
     git config core.hooksPath /dev/null || true
-    bash scripts/agent/preflight.sh
 validation:
-  preflight: bash scripts/agent/preflight.sh
-  fast: bash scripts/agent/validate-fast.sh
-  full: bash scripts/agent/validate-full.sh
+  preflight: npm ci --ignore-scripts
+  fast: npm run build
+  full: npm run build
   deploy_evidence: vercel
   evidence_required: true
 evidence_gate:
-  github_required_checks: ["symphony-gate"]
-  require_all_checks: true
+  github_required_checks: []
+  require_all_checks: false
   timeout_seconds: 1800
 repair:
   max_attempts: 2
@@ -75,7 +74,7 @@ codex:
     type: dangerFullAccess
 ---
 
-You are working on Linear ticket `{{ issue.identifier }}` for the `johnny-5-rebuild` repository.
+You are working on Linear ticket `{{ issue.identifier }}` for the `website` repository.
 
 Issue context:
 Identifier: {{ issue.identifier }}
@@ -113,4 +112,4 @@ Profile and validation boundaries:
 9. Commit the local change with a clear message.
 10. Leave the workspace on the committed branch and stop.
 
-Symphony will run validation, push the branch, create the draft PR, label it, record Linear evidence, require the repo-owned `symphony-gate` check plus deployment evidence, and move the issue to `Human Review` or `Rework`.
+Symphony will run validation, push the branch, create the draft PR, label it, record Linear evidence, require deployment evidence, and move the issue to `Human Review` or `Rework`.

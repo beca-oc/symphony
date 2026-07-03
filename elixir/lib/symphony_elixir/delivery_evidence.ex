@@ -75,6 +75,11 @@ defmodule SymphonyElixir.DeliveryEvidence do
     end
   end
 
+  @spec block_issue_with_report(Issue.t(), map(), keyword()) :: {:error, term()}
+  def block_issue_with_report(%Issue{} = issue, report, opts \\ []) when is_map(report) do
+    block_issue(issue, report, opts)
+  end
+
   @spec failure_bucket(term()) :: atom()
   def failure_bucket({:evidence_gate_failed, failures}) when is_list(failures), do: failure_bucket(failures)
   def failure_bucket({:validation_failed, _status, _output}), do: :validation_failed

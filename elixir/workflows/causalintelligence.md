@@ -15,7 +15,7 @@ tracker:
     - Done
     - Human Review
 polling:
-  interval_ms: 60000
+  interval_ms: 300000
 workspace:
   root: ~/code/symphony-workspaces/causalintelligence
 repo:
